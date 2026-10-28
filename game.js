@@ -3,13 +3,20 @@
    The host's browser is the "server". Players connect with a 4-letter room code.
    A WebSocket relay works on any network, unlike direct WebRTC peer connections. */
 
-const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt'];
+// Everyone connects to every broker they can reach, so host and players always share one.
+// shiftr runs on port 443, which gets through firewalls that block the others' ports.
+const BROKERS = [
+  { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
+  { url: 'wss://broker.hivemq.com:8884/mqtt' },
+  { url: 'wss://broker.emqx.io:8084/mqtt' }
+];
 const TOPIC = code => 'dlfeud/v2/' + code;
 const $ = s => document.querySelector(s);
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 const clean = (s, n = 20) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n);
 
-let client = null, room = null, role = null;
+let clients = [], room = null, role = null, seq = 0, lastSeq = -1, sent = 0;
+const handled = new Set();  // host only: message ids already acted on (each arrives once per broker)
 const myId = Math.random().toString(36).slice(2, 10);
 const seen = new Map();      // host only: playerId -> last time we heard from them
 let H = null;                // host only: full private state
@@ -43,29 +50,42 @@ const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { c
 /* =====================================================================
    HOST
    ===================================================================== */
-// Connect to the first broker that answers. Host and players try them in the same order.
-function connectBroker(will, i = 0) {
+// Resolves once the first broker connects; later ones are added to `clients` as they come up.
+// onUp(client) runs on every (re)connect of each broker.
+function connectAll(will, onUp, onMessage) {
   return new Promise((resolve, reject) => {
-    const c = mqtt.connect(BROKERS[i], { clientId: 'dlf_' + myId + '_' + i, will, reconnectPeriod: 2000, connectTimeout: 7000 });
-    const t = setTimeout(() => {
-      c.end(true);
-      if (i + 1 < BROKERS.length) connectBroker(will, i + 1).then(resolve, reject); else reject();
-    }, 7000);
-    c.once('connect', () => { clearTimeout(t); resolve(c); });
+    let pending = BROKERS.length, done = false;
+    const fail = () => { if (--pending === 0 && !done) { done = true; reject(); } };
+    BROKERS.forEach((b, i) => {
+      let c, ok = false;
+      try {
+        c = mqtt.connect(b.url, { clientId: 'dlf_' + myId + '_' + i, username: b.username, password: b.password, will, reconnectPeriod: 3000, connectTimeout: 8000 });
+      } catch (_) { return fail(); }
+      const t = setTimeout(() => { if (!ok) { c.end(true); fail(); } }, 9000);
+      c.on('message', onMessage);
+      c.on('connect', () => {
+        onUp(c);
+        if (ok) return;
+        ok = true; clearTimeout(t); clients.push(c);
+        if (!done) { done = true; resolve(); }
+      });
+    });
   });
 }
+const publishAll = (topic, payload, opts) => clients.forEach(c => { try { c.publish(topic, payload, opts); } catch (_) {} });
+const NO_SERVER = 'Could not reach the game server. A firewall, VPN or ad blocker may be blocking it. Try another network or browser.';
 
 async function startHost() {
+  if (!window.mqtt) return homeMsg(NO_SERVER);
   homeMsg('Opening room…');
   const code = makeCode();
   room = TOPIC(code);
-  try { client = await connectBroker({ topic: room + '/state', payload: '', retain: true, qos: 1 }); }
-  catch (_) { room = null; return homeMsg('Could not reach the game server. Check your connection and try again.'); }
+  const onUp = c => { c.subscribe(room + '/up', { qos: 1 }); if (H) broadcast(); };
+  const onMsg = (t, m) => { if (t === room + '/up') { try { onHostData(JSON.parse(m)); } catch (_) {} } };
+  try { await connectAll({ topic: room + '/state', payload: '', retain: true, qos: 1 }, onUp, onMsg); }
+  catch (_) { room = null; return homeMsg(NO_SERVER); }
   role = 'host';
-  client.subscribe(room + '/up', { qos: 1 });
-  client.on('message', (t, m) => { if (t === room + '/up') { try { onHostData(JSON.parse(m)); } catch (_) {} } });
-  client.on('connect', broadcast); // republish after a reconnect
-  addEventListener('pagehide', () => client.publish(room + '/state', '', { retain: true }));
+  addEventListener('pagehide', () => publishAll(room + '/state', '', { retain: true }));
   setInterval(() => seen.forEach((t, id) => { if (Date.now() - t > 20000) dropPlayer(id); }), 5000);
   initHost(code); enterGame();
 }
@@ -96,13 +116,14 @@ function publicState() {
 
 function broadcast() {
   pub = publicState();
-  if (client) client.publish(room + '/state', JSON.stringify({ t: 'state', s: pub }), { qos: 1, retain: true });
+  publishAll(room + '/state', JSON.stringify({ t: 'state', n: ++seq, s: pub }), { qos: 1, retain: true });
   render();
 }
 
 function onHostData(d) {
   if (!d || typeof d !== 'object' || !H) return;
   const id = clean(d.from, 16); if (!id) return;
+  if (d.m) { const key = id + ':' + d.m; if (handled.has(key)) return; handled.add(key); }
   if (d.t === 'leave') return dropPlayer(id);
   seen.set(id, Date.now());
   let p = H.players.find(x => x.id === id);
@@ -178,28 +199,28 @@ function act(name, arg) {
    PLAYER
    ===================================================================== */
 function sendUp(d) {
-  if (client && room) client.publish(room + '/up', JSON.stringify(Object.assign({ from: myId }, d)), { qos: 1 });
+  if (room) publishAll(room + '/up', JSON.stringify(Object.assign({ from: myId, m: ++sent }, d)), { qos: 1 });
 }
 
 async function joinGame(code, name) {
+  if (!window.mqtt) return homeMsg(NO_SERVER);
   homeMsg('Connecting…');
   room = TOPIC(code);
-  try { client = await connectBroker({ topic: room + '/up', payload: JSON.stringify({ t: 'leave', from: myId }), qos: 0 }); }
-  catch (_) { room = null; return homeMsg('Could not reach the game server. Check your connection and try again.'); }
-  client.on('message', (t, m) => {
+  const onUp = c => { c.subscribe(room + '/state', { qos: 1 }); c.publish(room + '/up', JSON.stringify({ from: myId, t: 'join', name }), { qos: 1 }); };
+  const onMsg = (t, m) => {
     if (t !== room + '/state') return;
     if (!m.length) { if (pub) toast('The host left, so the game has ended'); return; }
     let d; try { d = JSON.parse(m); } catch (_) { return; }
-    if (d.t !== 'state') return;
-    pub = d.s;
+    if (d.t !== 'state' || d.n <= lastSeq) return; // same state arrives once per broker
+    lastSeq = d.n; pub = d.s;
     if (role !== 'player') { role = 'player'; homeMsg(''); enterGame(); }
     render();
-  });
-  client.subscribe(room + '/state', { qos: 1 });
-  sendUp({ t: 'join', name });
+  };
+  try { await connectAll({ topic: room + '/up', payload: JSON.stringify({ t: 'leave', from: myId }), qos: 0 }, onUp, onMsg); }
+  catch (_) { room = null; return homeMsg(NO_SERVER); }
   setInterval(() => sendUp({ t: 'join', name }), 5000);
   addEventListener('pagehide', () => sendUp({ t: 'leave' }));
-  setTimeout(() => { if (!pub) homeMsg('Room not found. Check the code with your host.'); }, 6000);
+  setTimeout(() => { if (!pub) homeMsg('Room not found. Check the code with your host.'); }, 7000);
 }
 
 /* =====================================================================

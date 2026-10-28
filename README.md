@@ -27,5 +27,5 @@ Open `questions.js`. Each entry is a question plus `[answer, points]` pairs (max
 ## Good to know
 
 - The host's browser is the game server: if the host closes or refreshes the tab, the game ends.
-- Messages go through a free public relay (HiveMQ's MQTT broker over secure WebSockets, with EMQX as a fallback), so it works on any network that can load normal websites, mobile data included. Anyone who guesses a room code could listen in on the public board, so don't put anything private in questions or team names.
+- Messages go through free public relays (shiftr.io on the normal HTTPS port, plus HiveMQ and EMQX). Everyone connects to every relay they can reach, so a firewall blocking one or two is fine. Anyone who guesses a room code could listen in on the public board, so don't put anything private in questions or team names.
 - Unrevealed answers are never sent to players, so nobody can peek.
