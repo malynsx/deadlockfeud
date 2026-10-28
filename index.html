@@ -6,24 +6,26 @@
   <title>Deadlock Feud</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Jost:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="skyline" aria-hidden="true"></div>
 
 <!-- HOME -->
 <div id="home" class="screen">
-  <h1 class="logo">DEADLOCK <span>FEUD</span></h1>
-  <p class="tagline">Survey says&hellip;</p>
+  <div class="brandbar"><span class="brand-mark">◎</span> DEADLOCK <span class="brand-sub">fan-made party game</span></div>
+  <h1 class="logo"><span class="logo-small">Deadlock</span><span class="logo-big">FEUD</span></h1>
+  <p class="tagline"><span class="tag">Survey says&hellip;</span></p>
 
   <div class="card">
-    <h2>Host a game</h2>
+    <h2><span class="badge">1</span> Host a game</h2>
     <p class="muted">Open this on the big screen. You'll get a room code for everyone else.</p>
     <button id="btn-host" class="btn primary">Host a game</button>
   </div>
 
-  <div class="card">
-    <h2>Join a game</h2>
+  <div class="card tilt">
+    <h2><span class="badge">2</span> Join a game</h2>
     <input id="in-code" maxlength="4" placeholder="ROOM CODE" autocomplete="off" autocapitalize="characters">
     <input id="in-name" maxlength="20" placeholder="Your name" autocomplete="off">
     <button id="btn-join" class="btn">Join</button>
@@ -76,7 +78,7 @@
 <div id="xflash" class="xflash" hidden>✕</div>
 <div id="toast" class="toast" hidden></div>
 
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script src="questions.js"></script>
 <script src="game.js"></script>
 </body>

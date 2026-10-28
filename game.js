@@ -1,14 +1,17 @@
 'use strict';
-/* Deadlock Feud — host-authoritative game over PeerJS (WebRTC).
-   The host's browser is the "server". Players connect with a 4-letter room code. */
+/* Deadlock Feud — host-authoritative game relayed through a public MQTT broker (WebSockets).
+   The host's browser is the "server". Players connect with a 4-letter room code.
+   A WebSocket relay works on any network, unlike direct WebRTC peer connections. */
 
-const PREFIX = 'dlfeud-';
+const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt'];
+const TOPIC = code => 'dlfeud/v2/' + code;
 const $ = s => document.querySelector(s);
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 const clean = (s, n = 20) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n);
 
-let peer = null, role = null, myId = null, hostConn = null;
-const conns = new Map();     // host only: peerId -> DataConnection
+let client = null, room = null, role = null;
+const myId = Math.random().toString(36).slice(2, 10);
+const seen = new Map();      // host only: playerId -> last time we heard from them
 let H = null;                // host only: full private state
 let pub = null, prev = null; // public state (what everybody sees)
 
@@ -40,20 +43,31 @@ const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { c
 /* =====================================================================
    HOST
    ===================================================================== */
-function startHost() {
+// Connect to the first broker that answers. Host and players try them in the same order.
+function connectBroker(will, i = 0) {
+  return new Promise((resolve, reject) => {
+    const c = mqtt.connect(BROKERS[i], { clientId: 'dlf_' + myId + '_' + i, will, reconnectPeriod: 2000, connectTimeout: 7000 });
+    const t = setTimeout(() => {
+      c.end(true);
+      if (i + 1 < BROKERS.length) connectBroker(will, i + 1).then(resolve, reject); else reject();
+    }, 7000);
+    c.once('connect', () => { clearTimeout(t); resolve(c); });
+  });
+}
+
+async function startHost() {
   homeMsg('Opening room…');
   const code = makeCode();
-  peer = new Peer(PREFIX + code);
-  peer.on('open', () => { role = 'host'; myId = peer.id; initHost(code); enterGame(); });
-  peer.on('error', e => {
-    if (e.type === 'unavailable-id') { try { peer.destroy(); } catch (_) {} startHost(); }
-    else homeMsg('Could not open a room (' + e.type + '). Check your connection and try again.');
-  });
-  peer.on('connection', c => {
-    c.on('data', d => onHostData(c, d));
-    c.on('close', () => dropPlayer(c.peer));
-    c.on('error', () => dropPlayer(c.peer));
-  });
+  room = TOPIC(code);
+  try { client = await connectBroker({ topic: room + '/state', payload: '', retain: true, qos: 1 }); }
+  catch (_) { room = null; return homeMsg('Could not reach the game server. Check your connection and try again.'); }
+  role = 'host';
+  client.subscribe(room + '/up', { qos: 1 });
+  client.on('message', (t, m) => { if (t === room + '/up') { try { onHostData(JSON.parse(m)); } catch (_) {} } });
+  client.on('connect', broadcast); // republish after a reconnect
+  addEventListener('pagehide', () => client.publish(room + '/state', '', { retain: true }));
+  setInterval(() => seen.forEach((t, id) => { if (Date.now() - t > 20000) dropPlayer(id); }), 5000);
+  initHost(code); enterGame();
 }
 
 function initHost(code) {
@@ -82,22 +96,23 @@ function publicState() {
 
 function broadcast() {
   pub = publicState();
-  const msg = { t: 'state', s: pub };
-  conns.forEach(c => { try { c.send(msg); } catch (_) {} });
+  if (client) client.publish(room + '/state', JSON.stringify({ t: 'state', s: pub }), { qos: 1, retain: true });
   render();
 }
 
-function onHostData(c, d) {
-  if (!d || typeof d !== 'object') return;
-  let p = H.players.find(x => x.id === c.peer);
-  if (d.t === 'join') {
-    conns.set(c.peer, c);
+function onHostData(d) {
+  if (!d || typeof d !== 'object' || !H) return;
+  const id = clean(d.from, 16); if (!id) return;
+  if (d.t === 'leave') return dropPlayer(id);
+  seen.set(id, Date.now());
+  let p = H.players.find(x => x.id === id);
+  if (d.t === 'join') { // players re-send join every few seconds as a heartbeat
+    const name = clean(d.name) || 'Player';
     if (!p) {
       const nA = H.players.filter(x => x.team === 'A').length, nB = H.players.length - nA;
-      p = { id: c.peer, name: clean(d.name) || 'Player', team: nA <= nB ? 'A' : 'B' };
-      H.players.push(p);
-    } else p.name = clean(d.name) || p.name;
-    broadcast();
+      H.players.push({ id, name, team: nA <= nB ? 'A' : 'B' });
+      broadcast();
+    } else if (p.name !== name) { p.name = name; broadcast(); }
     return;
   }
   if (!p) return;
@@ -111,7 +126,7 @@ function onHostData(c, d) {
 
 function dropPlayer(id) {
   if (!H) return;
-  conns.delete(id);
+  seen.delete(id);
   const i = H.players.findIndex(p => p.id === id);
   if (i >= 0) { H.players.splice(i, 1); broadcast(); }
 }
@@ -162,21 +177,29 @@ function act(name, arg) {
 /* =====================================================================
    PLAYER
    ===================================================================== */
-function joinGame(code, name) {
+function sendUp(d) {
+  if (client && room) client.publish(room + '/up', JSON.stringify(Object.assign({ from: myId }, d)), { qos: 1 });
+}
+
+async function joinGame(code, name) {
   homeMsg('Connecting…');
-  peer = new Peer();
-  peer.on('open', id => {
-    myId = id;
-    hostConn = peer.connect(PREFIX + code, { reliable: true });
-    hostConn.on('open', () => { role = 'player'; hostConn.send({ t: 'join', name }); });
-    hostConn.on('data', d => { if (d && d.t === 'state') { pub = d.s; if (role === 'player') { enterGame(); } render(); } });
-    hostConn.on('close', () => toast('Disconnected from host — refresh to rejoin'));
-    hostConn.on('error', () => toast('Connection error'));
+  room = TOPIC(code);
+  try { client = await connectBroker({ topic: room + '/up', payload: JSON.stringify({ t: 'leave', from: myId }), qos: 0 }); }
+  catch (_) { room = null; return homeMsg('Could not reach the game server. Check your connection and try again.'); }
+  client.on('message', (t, m) => {
+    if (t !== room + '/state') return;
+    if (!m.length) { if (pub) toast('The host left, so the game has ended'); return; }
+    let d; try { d = JSON.parse(m); } catch (_) { return; }
+    if (d.t !== 'state') return;
+    pub = d.s;
+    if (role !== 'player') { role = 'player'; homeMsg(''); enterGame(); }
+    render();
   });
-  peer.on('error', e => {
-    homeMsg(e.type === 'peer-unavailable' ? 'Room not found. Check the code.' : 'Connection problem (' + e.type + ').');
-  });
-  setTimeout(() => { if (!pub) homeMsg('Still trying… if this hangs, the room code may be wrong or your network may block peer connections.'); }, 9000);
+  client.subscribe(room + '/state', { qos: 1 });
+  sendUp({ t: 'join', name });
+  setInterval(() => sendUp({ t: 'join', name }), 5000);
+  addEventListener('pagehide', () => sendUp({ t: 'leave' }));
+  setTimeout(() => { if (!pub) homeMsg('Room not found. Check the code with your host.'); }, 6000);
 }
 
 /* =====================================================================
@@ -322,18 +345,18 @@ function renderHost(s) {
 /* =====================================================================
    WIRING
    ===================================================================== */
-$('#btn-host').onclick = startHost;
+$('#btn-host').onclick = () => { if (!room) startHost(); };
 $('#btn-join').onclick = () => {
   const code = clean($('#in-code').value, 4).toUpperCase(), name = clean($('#in-name').value);
   if (code.length !== 4) return homeMsg('Enter the 4-letter room code.');
   if (!name) return homeMsg('Enter your name.');
-  joinGame(code, name);
+  if (!room) joinGame(code, name);
 };
-$('#btn-buzz').onclick = () => { if (hostConn && hostConn.open) hostConn.send({ t: 'buzz' }); };
+$('#btn-buzz').onclick = () => { if (role === 'player') sendUp({ t: 'buzz' }); };
 $('#answer-form').onsubmit = e => {
   e.preventDefault();
   const v = clean($('#in-answer').value, 60);
-  if (v && hostConn && hostConn.open) { hostConn.send({ t: 'answer', text: v }); $('#in-answer').value = ''; toast('Sent to host'); }
+  if (v && role === 'player') { sendUp({ t: 'answer', text: v }); $('#in-answer').value = ''; toast('Sent to host'); }
 };
 $('#btn-copy').onclick = () => {
   const url = location.origin + location.pathname + '?room=' + pub.code;
