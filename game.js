@@ -1,14 +1,19 @@
 'use strict';
-/* Deadlock Feud — host-authoritative game relayed through public MQTT brokers (WebSockets).
+/* Deadlock Feud — host-authoritative game relayed through public servers over WebSockets.
    The host's browser is the "server". Players connect with a 4-letter room code.
    The host can also run the game from a phone remote, which gets the answers on a private topic. */
 
-// Everyone connects to every broker they can reach, so host and players always share one.
-// shiftr runs on port 443, which gets through firewalls that block the others' ports.
-const BROKERS = [
-  { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
+// Everyone connects to every relay they can reach, so host and players always share one.
+// The MQTT brokers use ports 8884/8084, which some networks and VPNs block; the Nostr relays
+// run on the normal HTTPS port 443, so at least those get through.
+const RELAYS = [
   { url: 'wss://broker.hivemq.com:8884/mqtt' },
-  { url: 'wss://broker.emqx.io:8084/mqtt' }
+  { url: 'wss://broker.emqx.io:8084/mqtt' },
+  { url: 'wss://nos.lol', nostr: true },
+  { url: 'wss://relay.primal.net', nostr: true },
+  { url: 'wss://relay.snort.social', nostr: true },
+  { url: 'wss://nostr.mom', nostr: true },
+  { url: 'wss://offchain.pub', nostr: true }
 ];
 const TOPIC = code => 'dlfeud/v2/' + code;
 const $ = s => document.querySelector(s);
@@ -54,19 +59,53 @@ const other = t => t === 'A' ? 'B' : 'A';
 /* =====================================================================
    NETWORK
    ===================================================================== */
-// Resolves once the first broker connects; later ones are added to `clients` as they come up.
-// onUp(client) runs on every (re)connect of each broker.
-const diag = {}; // why each broker failed, shown with the error so problems can be reported
+// A Nostr relay dressed up as an MQTT client: topics become a "t" tag on ephemeral events,
+// which relays pass on to subscribers without storing them. There's no retained message,
+// so the host re-sends state whenever someone joins.
+const NOSTR_KIND = 21021;
+let nostrKey = null;
+class NostrRelay {
+  constructor(url) { this.url = url; this.h = {}; this.topics = new Set(); this.open = false; this.ended = false; this.connect(); }
+  on(ev, fn) { (this.h[ev] = this.h[ev] || []).push(fn); }
+  emit(ev, ...a) { (this.h[ev] || []).forEach(fn => fn(...a)); }
+  connect() {
+    const ws = this.ws = new WebSocket(this.url);
+    ws.onopen = () => { this.open = true; this.resubscribe(); this.emit('connect'); };
+    ws.onmessage = e => {
+      let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+      if (d[0] !== 'EVENT' || !d[2] || d[2].kind !== NOSTR_KIND) return;
+      const t = (d[2].tags.find(x => x[0] === 't') || [])[1];
+      if (this.topics.has(t)) this.emit('message', t, d[2].content);
+    };
+    ws.onerror = () => this.emit('error', new Error('websocket error'));
+    ws.onclose = () => { this.open = false; this.emit('close'); if (!this.ended) setTimeout(() => this.connect(), 3000); };
+  }
+  resubscribe() { if (this.open && this.topics.size) this.ws.send(JSON.stringify(['REQ', 'dlf', { kinds: [NOSTR_KIND], '#t': [...this.topics] }])); }
+  subscribe(topic) { this.topics.add(topic); this.resubscribe(); }
+  publish(topic, payload) {
+    if (!this.open) return;
+    nostrKey = nostrKey || NostrTools.generateSecretKey();
+    const ev = NostrTools.finalizeEvent({ kind: NOSTR_KIND, created_at: Math.floor(Date.now() / 1000), tags: [['t', topic]], content: String(payload) }, nostrKey);
+    this.ws.send(JSON.stringify(['EVENT', ev]));
+  }
+  end() { this.ended = true; try { this.ws.close(); } catch (_) {} }
+}
+
+// Resolves once the first relay connects; later ones are added to `clients` as they come up.
+// onUp(client) runs on every (re)connect of each relay.
+const diag = {}; // why each relay failed, shown with the error so problems can be reported
+const haveLibs = () => window.mqtt || window.NostrTools;
 function connectAll(will, onUp, onMessage) {
   return new Promise((resolve, reject) => {
-    let pending = BROKERS.length, done = false;
+    let pending = RELAYS.length, done = false;
     const fail = () => { if (--pending === 0 && !done) { done = true; reject(); } };
-    BROKERS.forEach((b, i) => {
-      const name = b.url.split('/')[2];
+    RELAYS.forEach((r, i) => {
+      const name = r.url.split('/')[2];
       let c, ok = false;
       try {
-        c = mqtt.connect(b.url, { clientId: 'dlf_' + myId + '_' + i, username: b.username, password: b.password, will, reconnectPeriod: 3000, connectTimeout: 8000 });
-      } catch (e) { diag[name] = 'threw ' + e.message; return fail(); }
+        if (r.nostr) { if (!window.NostrTools) throw new Error('nostr library did not load'); c = new NostrRelay(r.url); }
+        else { if (!window.mqtt) throw new Error('mqtt library did not load'); c = mqtt.connect(r.url, { clientId: 'dlf_' + myId + '_' + i, will, reconnectPeriod: 3000, connectTimeout: 8000 }); }
+      } catch (e) { diag[name] = e.message; return fail(); }
       const t = setTimeout(() => { if (!ok) { diag[name] = diag[name] || 'timed out'; c.end(true); fail(); } }, 9000);
       c.on('error', e => { if (!ok) diag[name] = 'error ' + (e && e.message || e); });
       c.on('close', () => { if (!ok && !diag[name]) diag[name] = 'closed by network'; });
@@ -86,7 +125,7 @@ const NO_SERVER = 'Could not reach the game server. A browser extension, firewal
 // Shows the error plus what failed, and checks whether this browser can open WebSockets at all.
 function connectError() {
   homeMsg(NO_SERVER);
-  const lines = window.mqtt ? Object.entries(diag).map(([k, v]) => k + ': ' + v) : ['mqtt.min.js did not load (blocked or missing)'];
+  const lines = haveLibs() ? Object.entries(diag).map(([k, v]) => k + ': ' + v) : ['the connection libraries did not load (blocked or missing)'];
   const box = el('pre', 'diag', lines.join('\n') + '\nWebSocket test: checking…');
   $('#home-msg').append(box);
   let ws, settled = false;
@@ -103,7 +142,7 @@ function sendUp(d) {
    HOST
    ===================================================================== */
 async function startHost() {
-  if (!window.mqtt) return connectError();
+  if (!haveLibs()) return connectError();
   homeMsg('Opening room…');
   const code = makeCode();
   room = TOPIC(code);
@@ -274,7 +313,7 @@ function onStateMessage(m) {
 }
 
 async function joinGame(code, name) {
-  if (!window.mqtt) return connectError();
+  if (!haveLibs()) return connectError();
   homeMsg('Connecting…');
   room = TOPIC(code);
   const onUp = c => { c.subscribe(room + '/state', { qos: 1 }); c.publish(room + '/up', JSON.stringify({ from: myId, t: 'join', name }), { qos: 1 }); };
@@ -291,7 +330,7 @@ async function joinGame(code, name) {
 }
 
 async function joinRemote(code, key) {
-  if (!window.mqtt) return connectError();
+  if (!haveLibs()) return connectError();
   homeMsg('Connecting the remote…');
   room = TOPIC(code); remoteKey = key;
   const onUp = c => { c.subscribe(room + '/state', { qos: 1 }); c.subscribe(room + '/ctl/' + key, { qos: 1 }); };
