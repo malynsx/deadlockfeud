@@ -252,7 +252,8 @@ window.HEROES = [
     }
    ]
   },
-  "quoteAudio": "heroes/billy/quote.mp3"
+  "quoteAudio": "heroes/billy/quote.mp3",
+  "critical": "heroes/billy/critical.webp"
  },
  {
   "id": "calico",
@@ -1963,7 +1964,8 @@ window.HEROES = [
     }
    ]
   },
-  "quoteAudio": "heroes/violet/quote.mp3"
+  "quoteAudio": "heroes/violet/quote.mp3",
+  "critical": "heroes/violet/critical.webp"
  },
  {
   "id": "viscous",

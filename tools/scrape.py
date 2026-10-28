@@ -8,6 +8,8 @@ API = 'https://deadlock.wiki/api.php'
 UA = {'User-Agent': 'DeadlockFeud/1.0 (fan-made party game; one-off asset fetch)'}
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 LIMITS = {'gloat': 5, 'critical': 4}
+# portraits the wiki files under misspelled names
+OVERRIDES = {'Billy': {'critical': 'Bily_Critical.png'}, 'Violet': {'critical': 'Violet_ciritcal.png'}}
 
 
 def get(params):
@@ -114,6 +116,7 @@ def main():
         for pre in prefixes:
             names += [i['name'] for i in get({'action': 'query', 'list': 'allimages', 'aiprefix': pre, 'ailimit': 500})['query']['allimages']]
         pics = {k: find_image(names, k) for k in ('card', 'gloat', 'critical')}
+        pics.update(OVERRIDES.get(hero, {}))
         if not pics['card']:
             print('skip (no card):', hero, file=sys.stderr)
             continue

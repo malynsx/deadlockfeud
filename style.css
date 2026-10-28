@@ -469,3 +469,26 @@ body.editing { overflow: hidden; }
   .team-col { padding-bottom: 64px; }
   .t-say { top: auto; bottom: 6px; }
 }
+
+/* ---------- ROCKING: Deadlock-style stepped wobble ----------
+   Tilt one way, hold, snap to the other side; no easing in between, like a few frames of stop-motion.
+   Uses the separate `rotate` property so it stacks on top of any tilt an element already has. */
+@keyframes rock { 0% { rotate: calc(var(--rock, 1.5deg) * -1); } 50% { rotate: var(--rock, 1.5deg); } 100% { rotate: calc(var(--rock, 1.5deg) * -1); } }
+.btn:hover:not(:disabled) { --rock: 1.2deg; animation: rock .5s steps(1, end) infinite; }
+.btn:active:not(:disabled) { animation: none; }
+.hero:hover:not(:disabled) { --rock: 2deg; animation: rock .45s steps(1, end) infinite; }
+.hero.mine { --rock: 1.5deg; animation: rock .9s steps(1, end) infinite; }
+.card:hover .num-ring { --rock: 8deg; animation: rock .5s steps(1, end) infinite; }
+.cover:hover .cover-tags .tag { --rock: 2deg; animation: rock .55s steps(1, end) infinite; }
+.cover:hover .cover-tags .tag:nth-child(2) { animation-delay: -.2s; }
+.join-code { --rock: 1deg; animation: rock 1.4s steps(1, end) infinite; }
+.banner.tag { --rock: 1deg; animation: rock .8s steps(1, end) infinite; }
+.t-say:not([hidden]) { --rock: 1.2deg; animation: fadein .2s ease-out, rock .6s steps(1, end) .2s infinite; }
+.ticket.gloat .t-face { --rock: 2.5deg; animation: rock .45s steps(1, end) infinite; }
+.ticket.critical .t-face { --rock: 3deg; animation: rock .14s steps(1, end) 4; }
+.strikes .x.on { --rock: 6deg; animation: rock .12s steps(1, end) 3; }
+.toast { --rock: .8deg; animation: rock .7s steps(1, end) infinite; }
+.hsec summary:hover::before { --rock: 12deg; display: inline-block; animation: rock .4s steps(1, end) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .btn, .hero, .hero.mine, .num-ring, .tag, .join-code, .banner, .t-say, .t-face, .strikes .x, .toast, .hsec summary::before { animation: none !important; }
+}
