@@ -5,12 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Deadlock Feud</title>
   <meta name="theme-color" content="#100e0e">
+  <meta name="description" content="A Family Feud-style party game for Deadlock. One screen hosts, everyone buzzes in from their phone.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta property="og:title" content="Deadlock Feud">
+  <meta property="og:description" content="Survey says. A Family Feud-style party game for Deadlock.">
+  <meta property="og:image" content="https://malynsx.github.io/deadlockfeud/icon-512.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&display=swap" rel="stylesheet">
   <link rel="preload" href="fonts/ValveOccult-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/ValvePulp-Bold.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
@@ -23,7 +30,7 @@
 </svg>
 
 <header class="sitebar">
-  <span class="sitebar-name">Deadlock Feud</span>
+  <span class="sitebar-name"><img class="logo-mark" src="logo.svg" alt="">Deadlock Feud</span>
   <span class="sitebar-note">A fan-made party game.<br>Not affiliated with Valve.</span>
 </header>
 
@@ -31,6 +38,7 @@
 <div id="home" class="screen">
   <div class="home">
     <article class="cover paper">
+      <img class="cover-stamp" src="logo.svg" alt="">
       <div class="cover-frame">
         <p class="cover-top"><span>A Deadlock party game</span><span>Vol. 1</span></p>
         <h1 class="cover-title">Deadlock<br>Feud</h1>
@@ -69,7 +77,7 @@
 <!-- GAME -->
 <div id="game" hidden>
   <div class="topbar">
-    <div class="room">Room <b id="room-code"></b></div>
+    <div class="room"><img class="logo-mark" src="logo.svg" alt="Deadlock Feud">Room <b id="room-code"></b></div>
     <div id="phase-label"></div>
     <div class="topbar-right">
       <button id="btn-copy" class="btn small" hidden>Copy invite link</button>

@@ -492,3 +492,13 @@ body.editing { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .btn, .hero, .hero.mine, .num-ring, .tag, .join-code, .banner, .t-say, .t-face, .strikes .x, .toast, .hsec summary::before { animation: none !important; }
 }
+
+/* ---------- LOGO ---------- */
+.logo-mark { width: 26px; height: 26px; vertical-align: -7px; margin-right: 9px; }
+.sitebar-name .logo-mark { width: 30px; height: 30px; vertical-align: -8px; }
+.room .logo-mark { margin-right: 12px; }
+.cover-stamp { position: absolute; z-index: 2; bottom: -24px; right: -20px; width: 92px; height: 92px; rotate: 10deg; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .45)); }
+.cover:hover .cover-stamp { --rock: 4deg; animation: rock .5s steps(1, end) infinite; }
+.sitebar-name:hover .logo-mark { --rock: 10deg; animation: rock .45s steps(1, end) infinite; }
+@media (max-width: 640px) { .cover-stamp { width: 70px; height: 70px; bottom: -16px; right: -10px; } }
+@media (prefers-reduced-motion: reduce) { .cover-stamp, .logo-mark { animation: none !important; } }
