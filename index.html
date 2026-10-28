@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&display=swap" rel="stylesheet">
   <link rel="preload" href="fonts/ValveOccult-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/ValvePulp-Bold.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
@@ -40,7 +40,11 @@
       <section class="card">
         <h2><span class="num-ring">1</span>Host a game</h2>
         <p class="muted">Open this on the screen everyone can see. Players join with a code or a QR scan.</p>
-        <button id="btn-host" class="btn primary">Host a game</button>
+        <div class="host-btns">
+          <button id="btn-host" class="btn primary">Host a game</button>
+          <button id="btn-edit" class="btn ghost" type="button">Edit questions</button>
+        </div>
+        <p class="muted small" id="q-info"></p>
       </section>
 
       <section class="card">
@@ -68,12 +72,26 @@
   <div class="layout">
     <main class="stage">
       <div class="scores">
-        <div id="team-A" class="ticket amber"><span class="tag team-name"></span><div class="team-score">0</div><div class="ticket-note"></div></div>
+        <div class="team-col">
+          <div id="team-A" class="ticket amber">
+            <div class="t-face"><img alt=""></div>
+            <div class="t-main"><span class="tag team-name"></span><div class="team-score">0</div><div class="ticket-note"></div></div>
+            <div class="t-roster"></div>
+          </div>
+          <div class="t-say paper" id="say-A" hidden><b></b><span></span></div>
+        </div>
         <div class="center">
           <div class="bank-label">Bank <span id="mult"></span></div>
           <div id="bank" class="bank">0</div>
         </div>
-        <div id="team-B" class="ticket sapphire"><span class="tag team-name"></span><div class="team-score">0</div><div class="ticket-note"></div></div>
+        <div class="team-col">
+          <div id="team-B" class="ticket sapphire">
+            <div class="t-face"><img alt=""></div>
+            <div class="t-main"><span class="tag team-name"></span><div class="team-score">0</div><div class="ticket-note"></div></div>
+            <div class="t-roster"></div>
+          </div>
+          <div class="t-say paper" id="say-B" hidden><b></b><span></span></div>
+        </div>
       </div>
 
       <!-- LOBBY (shown before the first question) -->
@@ -111,6 +129,13 @@
           <button class="btn" type="submit">Send</button>
         </form>
       </section>
+
+      <!-- HERO PICKER (players) -->
+      <section class="picker" id="picker" hidden>
+        <div class="picker-head"><h2>Pick your hero</h2><p class="muted" id="picker-note">Tap a portrait. Each hero can only be picked once.</p></div>
+        <div class="hero-grid" id="hero-grid"></div>
+        <p class="hero-quote" id="hero-quote" hidden></p>
+      </section>
     </main>
 
     <!-- HOST CONTROLS (host screen and phone remote) -->
@@ -120,11 +145,14 @@
 
 <div id="xflash" class="xflash" hidden><span>X</span></div>
 <div id="toast" class="toast" role="status" hidden></div>
+<div id="editor" class="editor" role="dialog" aria-label="Question editor" hidden></div>
 
 <script src="vendor/mqtt.min.js"></script>
 <script src="vendor/nostr.bundle.js"></script>
 <script src="vendor/qrcode.min.js"></script>
-<script src="questions.js?v=7"></script>
-<script src="game.js?v=7"></script>
+<script src="questions.js?v=8"></script>
+<script src="heroes.js?v=8"></script>
+<script src="editor.js?v=8"></script>
+<script src="game.js?v=8"></script>
 </body>
 </html>

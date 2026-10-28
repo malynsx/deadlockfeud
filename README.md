@@ -21,7 +21,17 @@ Keys on the host screen: 1 to 8 reveal, X strike, B buzzers, N next step, U undo
 
 ## Editing questions
 
-Open `questions.js`. Each entry is a question plus `[answer, points]` pairs (max 8). The points shipped here are estimates. For the real Family Feud feel, ask 30–50 people and use their actual answers.
+On the home screen (or in the host panel's **Game** section before a game starts) click **Edit questions**. You can change the wording, answers and points, add, copy, reorder or delete questions, and switch individual questions out of the game. **Save questions** keeps them in this browser; answers are sorted highest first automatically.
+
+Questions are saved per browser, so use **Export** to download a `.json` copy and **Import** to load it on another computer. **Reset to defaults** goes back to the built-in set in `questions.js`.
+
+## Heroes
+
+Players pick a Deadlock hero in the lobby (each hero once per room). The team tickets show the hero of whoever is answering, plus small portraits of the whole team. When someone gets an answer, their portrait switches to the gloat card and they say a kill line; a strike shows the critical card and a low-health line. Voices only play on the big screen.
+
+Within a team, players answer in turn, Family Feud style. In the face-off it's whoever buzzed.
+
+Portraits, quotes and voice lines come from [deadlock.wiki](https://deadlock.wiki) and belong to Valve. To refresh them when new heroes come out, run `python tools/scrape.py` and then `python tools/compress.py` (needs Pillow).
 
 ## Good to know
 

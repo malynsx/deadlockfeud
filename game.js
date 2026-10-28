@@ -164,7 +164,7 @@ async function startHost() {
 function initHost(code) {
   H = {
     code, remoteKey: randId(10), remoteOn: false, history: [],
-    order: shuffle(window.QUESTIONS.map((_, i) => i)), qNum: 0, q: null,
+    order: newOrder(), qNum: 0, q: null, turn: { A: 0, B: 0 }, react: null, reactSeq: 0,
     answers: [], strikes: 0, bank: 0, scores: { A: 0, B: 0 },
     teamNames: { A: 'Amber', B: 'Sapphire' }, control: null,
     buzzOpen: false, buzz: null, phase: 'lobby', players: [], feed: []
@@ -172,6 +172,26 @@ function initHost(code) {
 }
 
 const mult = () => !H || H.qNum <= 3 ? 1 : H.qNum <= 6 ? 2 : 3;
+// questions switched off in the editor are skipped
+const newOrder = () => shuffle(window.QUESTIONS.map((q, i) => q.on === false ? -1 : i).filter(i => i >= 0));
+
+/* ---------- heroes: whose turn it is, and who reacts to a reveal or strike ---------- */
+const HERO_BY_ID = Object.fromEntries((window.HEROES || []).map(h => [h.id, h]));
+const membersOf = t => H.players.filter(p => p.team === t);
+const memberAt = t => { const m = membersOf(t); return m.length ? m[H.turn[t] % m.length] : null; };
+function react(kind, player) {
+  const hero = player && HERO_BY_ID[player.hero];
+  if (!hero) return;
+  const lines = (hero.lines && hero.lines[kind]) || [];
+  H.react = { n: ++H.reactSeq, team: player.team, pid: player.id, hero: hero.id, kind, line: lines.length ? Math.floor(Math.random() * lines.length) : -1 };
+}
+// The player answering right now: the buzzer in a face-off, then team members in turn.
+function answerer() {
+  if (H.phase === 'faceoff') return H.buzz ? H.players.find(p => p.id === H.buzz.id) : null;
+  if (H.phase === 'play') return memberAt(H.control);
+  if (H.phase === 'steal') return memberAt(other(H.control));
+  return null;
+}
 
 function publicState() {
   return {
@@ -180,7 +200,9 @@ function publicState() {
     answers: H.answers.map(a => a.revealed ? { revealed: true, text: a.text, points: a.points } : { revealed: false }),
     strikes: H.strikes, bank: H.bank, scores: H.scores, teamNames: H.teamNames,
     control: H.control, buzzOpen: H.buzzOpen, buzz: H.buzz, canUndo: H.history.length > 0,
-    players: H.players.map(p => ({ id: p.id, name: p.name, team: p.team })),
+    players: H.players.map(p => ({ id: p.id, name: p.name, team: p.team, hero: p.hero || null })),
+    up: H.phase === 'play' || H.phase === 'steal' ? { A: (memberAt('A') || {}).id || null, B: (memberAt('B') || {}).id || null } : null,
+    react: H.react,
     feed: H.feed.slice(-8)
   };
 }
@@ -213,6 +235,11 @@ function onHostData(d) {
   if (!p) return;
   if (d.t === 'buzz') {
     if (H.buzzOpen && !H.buzz) { H.buzz = { id: p.id, name: p.name, team: p.team }; H.buzzOpen = false; broadcast(); }
+  } else if (d.t === 'hero') {
+    const hero = HERO_BY_ID[d.id] ? d.id : null;
+    // taken by someone else: re-send state so their picker shows it as taken
+    if (!(hero && H.players.some(x => x.hero === hero && x.id !== p.id))) p.hero = hero;
+    broadcast();
   } else if (d.t === 'answer') {
     const text = clean(d.text, 60);
     if (text) { H.feed.push({ name: p.name, team: p.team, text }); if (H.feed.length > 30) H.feed.shift(); broadcast(); }
@@ -241,13 +268,17 @@ function dropPlayer(id) {
 
 // Game actions can be undone; roster and housekeeping actions can't.
 const UNDOABLE = new Set(['start', 'next', 'openBuzz', 'closeBuzz', 'control', 'reveal', 'strike', 'award', 'steal', 'resetScores']);
-const SNAP_KEYS = ['qNum', 'q', 'answers', 'strikes', 'bank', 'scores', 'control', 'buzzOpen', 'buzz', 'phase'];
+const SNAP_KEYS = ['qNum', 'q', 'answers', 'strikes', 'bank', 'scores', 'control', 'buzzOpen', 'buzz', 'phase', 'turn'];
 const isTeam = t => t === 'A' || t === 'B';
 
 const actions = {
   start() { actions.next(); },
   next() {
-    if (H.qNum >= H.order.length) { H.phase = 'gameover'; H.q = null; H.answers = []; H.buzzOpen = false; H.buzz = null; H.control = null; return; }
+    if (H.qNum >= H.order.length) {
+      H.phase = 'gameover'; H.q = null; H.answers = []; H.buzzOpen = false; H.buzz = null; H.control = null;
+      const { A, B } = H.scores; if (A !== B) react('gloat', memberAt(A > B ? 'A' : 'B'));
+      return;
+    }
     H.q = window.QUESTIONS[H.order[H.qNum]]; H.qNum++;
     H.answers = H.q.a.slice(0, 8).map(([text, points]) => ({ text, points, revealed: false }));
     H.strikes = 0; H.bank = 0; H.control = null; H.buzz = null; H.buzzOpen = false; H.phase = 'faceoff';
@@ -258,10 +289,14 @@ const actions = {
   reveal(i) {
     const a = H.answers[i]; if (!a || a.revealed || !H.q || H.phase === 'roundover') return;
     a.revealed = true; H.bank += a.points;
+    const who = answerer(); react('gloat', who);
+    if (H.phase === 'play' && who) H.turn[H.control]++;
   },
   strike() {
     if (!H.q || !['faceoff', 'play', 'steal'].includes(H.phase)) return;
     H.strikes = Math.min(3, H.strikes + 1);
+    const who = answerer(); react('critical', who);
+    if (H.phase === 'play' && who) H.turn[H.control]++;
     if (H.strikes >= 3 && H.phase === 'play') H.phase = 'steal';
   },
   award(team) {
@@ -276,7 +311,7 @@ const actions = {
     Object.assign(H, JSON.parse(snap));
   },
   restart() {
-    Object.assign(H, { order: shuffle(window.QUESTIONS.map((_, i) => i)), qNum: 0, q: null, answers: [], strikes: 0, bank: 0,
+    Object.assign(H, { order: newOrder(), qNum: 0, q: null, answers: [], strikes: 0, bank: 0, turn: { A: 0, B: 0 },
       scores: { A: 0, B: 0 }, control: null, buzzOpen: false, buzz: null, phase: 'lobby', feed: [], history: [] });
   },
   swap(id) { const p = H.players.find(x => x.id === id); if (p) p.team = other(p.team); },
@@ -362,13 +397,9 @@ function render() {
   $('#phase-label').textContent = role === 'remote' ? 'Phone remote' : (PHASE[s.phase] || '');
   $('#btn-copy').hidden = role !== 'host'; $('#btn-present').hidden = role !== 'host';
 
-  for (const t of ['A', 'B']) {
-    const e = $('#team-' + t);
-    e.querySelector('.team-name').textContent = s.teamNames[t];
-    e.querySelector('.team-score').textContent = s.scores[t];
-    e.querySelector('.ticket-note').textContent = s.control === t ? (s.phase === 'steal' ? 'Defending' : 'In control') : (s.phase === 'steal' && s.control ? 'Stealing' : '');
-    e.classList.toggle('control', s.control === t);
-  }
+  document.body.dataset.phase = s.phase;
+  noteReaction(s);
+  for (const t of ['A', 'B']) renderTicket(s, t);
   $('#bank').textContent = s.bank;
   $('#mult').textContent = s.mult > 1 ? 'x' + s.mult : '';
 
@@ -377,9 +408,100 @@ function render() {
   if (s.phase === 'lobby') renderLobby(s);
   else renderRound(s);
 
-  if (controls) renderHost(s); else renderPlayer(s);
+  if (controls) renderHost(s); else { renderPlayer(s); renderPicker(s); }
   detectEvents(s);
   prev = s;
+}
+
+/* ---------- team tickets: portrait of whoever is up, team faces, and hero reactions ---------- */
+const REACT_MS = 4200;
+let liveReact = null; // { n, until } of the reaction currently on screen
+
+function noteReaction(s) {
+  const r = s.react;
+  if (!r || (liveReact && liveReact.n === r.n)) return;
+  liveReact = { n: r.n, until: Date.now() + REACT_MS };
+  if (!prev) { liveReact.until = 0; return; } // don't replay an old reaction on join
+  setTimeout(() => { if (pub) render(); }, REACT_MS + 50);
+  const hero = HERO_BY_ID[r.hero], line = hero && hero.lines[r.kind] && hero.lines[r.kind][r.line];
+  if (role === 'host' && line) { // one speaker: only the big screen plays voices
+    const a = new Audio(line.audio); a.volume = .9;
+    setTimeout(() => a.play().catch(() => {}), r.kind === 'gloat' ? 450 : 650);
+  }
+}
+
+function setImg(img, src) { if (img.getAttribute('src') !== src) { if (src) img.src = src; else img.removeAttribute('src'); } }
+
+function faceEl(player, active) {
+  const hero = player && HERO_BY_ID[player.hero];
+  const f = el('span', 'mini' + (active ? ' up' : '') + (hero ? '' : ' blank'));
+  f.title = player.name + (hero ? ' (' + hero.name + ')' : '');
+  if (hero) { const i = el('img'); i.src = hero.card; i.alt = ''; i.loading = 'lazy'; f.append(i); }
+  else f.textContent = player.name.slice(0, 1).toUpperCase();
+  return f;
+}
+
+function renderTicket(s, t) {
+  const e = $('#team-' + t);
+  e.querySelector('.team-name').textContent = s.teamNames[t];
+  e.querySelector('.team-score').textContent = s.scores[t];
+  e.querySelector('.ticket-note').textContent = s.control === t ? (s.phase === 'steal' ? 'Defending' : 'In control') : (s.phase === 'steal' && s.control ? 'Stealing' : '');
+  e.classList.toggle('control', s.control === t);
+
+  const members = s.players.filter(p => p.team === t);
+  const r = s.react && s.react.team === t && liveReact && liveReact.n === s.react.n && Date.now() < liveReact.until ? s.react : null;
+  const upId = s.up && s.up[t];
+  const face = r ? members.find(p => p.id === r.pid) || { hero: r.hero, name: '' } : members.find(p => p.id === upId && p.hero) || members.find(p => p.hero);
+  const hero = face && HERO_BY_ID[face.hero];
+  const img = e.querySelector('.t-face img');
+  e.classList.toggle('has-face', !!hero);
+  e.classList.toggle('gloat', !!(r && r.kind === 'gloat')); e.classList.toggle('critical', !!(r && r.kind === 'critical'));
+  setImg(img, hero ? (r && hero[r.kind]) || hero.card : '');
+
+  const roster = e.querySelector('.t-roster'); roster.replaceChildren();
+  members.forEach(p => roster.append(faceEl(p, p.id === upId)));
+
+  const say = $('#say-' + t), line = r && hero && hero.lines[r.kind] && hero.lines[r.kind][r.line];
+  say.hidden = !line;
+  say.className = 't-say paper ' + (r ? r.kind : '');
+  if (line) { say.querySelector('b').textContent = hero.name; say.querySelector('span').textContent = line.text; }
+}
+
+/* ---------- hero picker (players) ---------- */
+let myPick = null, quoteAudio = null;
+function renderPicker(s) {
+  const me = s.players.find(p => p.id === myId);
+  const P = $('#picker');
+  P.hidden = !window.HEROES || !me || !(s.phase === 'lobby' || !me.hero);
+  if (P.hidden) return;
+  const mine = me.hero || myPick;
+  const grid = $('#hero-grid');
+  if (!grid.children.length) {
+    window.HEROES.forEach(h => {
+      const b = el('button', 'hero'); b.type = 'button'; b.dataset.id = h.id;
+      const i = el('img'); i.src = h.card; i.alt = ''; i.loading = 'lazy';
+      b.append(i, el('span', 'hero-name', h.name), el('span', 'hero-taken'));
+      b.onclick = () => pickHero(h);
+      grid.append(b);
+    });
+  }
+  const takenBy = Object.fromEntries(s.players.filter(p => p.hero && p.id !== myId).map(p => [p.hero, p.name]));
+  [...grid.children].forEach(b => {
+    const by = takenBy[b.dataset.id];
+    b.classList.toggle('mine', b.dataset.id === mine);
+    b.disabled = !!by;
+    b.querySelector('.hero-taken').textContent = by || '';
+  });
+  const h = HERO_BY_ID[mine], q = $('#hero-quote');
+  q.hidden = !h;
+  if (h) q.replaceChildren(el('b', null, h.name), document.createTextNode(h.quote ? ' ' + h.quote : ''));
+  $('#picker-note').textContent = mine ? 'Tap another portrait to switch.' : 'Tap a portrait. Each hero can only be picked once.';
+}
+function pickHero(h) {
+  myPick = h.id; sendUp({ t: 'hero', id: h.id });
+  if (quoteAudio) quoteAudio.pause();
+  if (h.quoteAudio) { quoteAudio = new Audio(h.quoteAudio); quoteAudio.play().catch(() => {}); }
+  if (pub) renderPicker(pub);
 }
 
 let qrFor = null;
@@ -396,7 +518,7 @@ function renderLobby(s) {
     const ul = $('#roster-' + t); ul.replaceChildren();
     const names = s.players.filter(p => p.team === t);
     if (!names.length) ul.append(el('li', 'empty', 'Nobody yet'));
-    names.forEach(p => ul.append(el('li', p.id === myId ? 'me' : '', p.name)));
+    names.forEach(p => { const li = el('li', p.id === myId ? 'me' : ''); li.append(faceEl(p), el('span', null, p.name)); ul.append(li); });
   }
 }
 
@@ -471,6 +593,7 @@ function nextStep(s, answers) {
   const B = (label, a, v, cls = 'primary', key) => ({ label, a, v, cls, key });
   switch (s.phase) {
     case 'lobby':
+      if (!s.total) return { title: 'No questions yet', text: 'Every question is switched off. Open Game, then Edit questions, and switch some on.', btns: [] };
       return { title: 'Waiting for players', text: s.players.length ? s.players.length + ' joined. Start when everyone is in.' : 'Players scan the code on screen, or open the site and type ' + s.code + '.',
         btns: [B('Start the game', 'start', null, 'primary', 'N')] };
     case 'faceoff':
@@ -566,7 +689,7 @@ function renderHost(s) {
     const chips = el('div', 'chips');
     const mine = s.players.filter(p => p.team === t);
     if (!mine.length) chips.append(el('span', 'muted', 'Nobody yet'));
-    mine.forEach(p => { const c = el('button', 'chip', p.name); c.type = 'button'; c.title = 'Move to the other team'; c.onclick = () => cmd('swap', p.id); chips.append(c); });
+    mine.forEach(p => { const c = el('button', 'chip'); c.type = 'button'; c.title = 'Move to the other team'; c.append(faceEl(p), el('span', null, p.name)); c.onclick = () => cmd('swap', p.id); chips.append(c); });
     box.append(inp, chips); tsec.append(box);
   }
   tsec.append(el('p', 'hint', 'Click a name to move it to the other team.'));
@@ -589,6 +712,9 @@ function renderHost(s) {
   const g = el('div', 'tools');
   g.append(btn('Reset scores', 'small ghost', () => { if (confirm('Reset both scores to 0?')) cmd('resetScores'); }),
     btn('New game', 'small ghost', () => { if (confirm('Start over from the lobby? Scores reset and players stay.')) cmd('restart'); }));
+  if (role === 'host' && (s.phase === 'lobby' || s.phase === 'gameover')) {
+    g.prepend(btn('Edit questions', 'small', () => QEditor.open(() => { H.order = newOrder(); broadcast(); toast('Questions saved'); })));
+  }
   gsec.append(g);
   if (role === 'host') gsec.append(el('p', 'hint', 'Keys: 1 to 8 reveal, X strike, B buzzers, N next step, U undo, H hide controls.'));
 }
@@ -602,6 +728,12 @@ function copy(text, msg) {
    WIRING
    ===================================================================== */
 $('#btn-host').onclick = () => { if (!room) startHost(); };
+function questionInfo() {
+  const on = window.QUESTIONS.filter(q => q.on !== false).length;
+  $('#q-info').textContent = on + ' question' + (on === 1 ? '' : 's') + ' ready' + (QStore.isCustom() ? ', your own set.' : ', the built-in set.');
+}
+$('#btn-edit').onclick = () => QEditor.open(questionInfo);
+questionInfo();
 $('#btn-join').onclick = () => {
   const code = clean($('#in-code').value, 4).toUpperCase(), name = clean($('#in-name').value);
   if (code.length !== 4) return homeMsg('Enter the 4-letter room code.');
@@ -619,7 +751,7 @@ $('#btn-copy').onclick = () => copy(pageUrl() + '?room=' + pub.code, 'Invite lin
 function togglePresent() { document.body.classList.toggle('presenting'); }
 $('#btn-present').onclick = togglePresent;
 document.addEventListener('keydown', e => {
-  if (role !== 'host' || /INPUT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (role !== 'host' || QEditor.isOpen() || /INPUT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key.toLowerCase();
   if (k >= '1' && k <= '8') act('reveal', Number(k) - 1);
   else if (k === 'x') act('strike');
