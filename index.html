@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deadlock Feud</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- HOME -->
+<div id="home" class="screen">
+  <h1 class="logo">DEADLOCK <span>FEUD</span></h1>
+  <p class="tagline">Survey says&hellip;</p>
+
+  <div class="card">
+    <h2>Host a game</h2>
+    <p class="muted">Open this on the big screen. You'll get a room code for everyone else.</p>
+    <button id="btn-host" class="btn primary">Host a game</button>
+  </div>
+
+  <div class="card">
+    <h2>Join a game</h2>
+    <input id="in-code" maxlength="4" placeholder="ROOM CODE" autocomplete="off" autocapitalize="characters">
+    <input id="in-name" maxlength="20" placeholder="Your name" autocomplete="off">
+    <button id="btn-join" class="btn">Join</button>
+  </div>
+  <p id="home-msg" class="msg"></p>
+</div>
+
+<!-- GAME -->
+<div id="game" class="screen" hidden>
+  <header class="topbar">
+    <div>Room <b id="room-code"></b></div>
+    <div id="phase-label"></div>
+    <div class="topbar-right">
+      <button id="btn-copy" class="btn small" hidden>Copy invite link</button>
+      <button id="btn-present" class="btn small" hidden>Presentation mode (H)</button>
+    </div>
+  </header>
+
+  <div class="scores">
+    <div id="team-A" class="team amber"><div class="team-name"></div><div class="team-score">0</div></div>
+    <div class="center">
+      <div class="bank-label">BANK <span id="mult"></span></div>
+      <div id="bank" class="bank">0</div>
+      <div id="qcount" class="muted"></div>
+    </div>
+    <div id="team-B" class="team sapphire"><div class="team-name"></div><div class="team-score">0</div></div>
+  </div>
+
+  <div id="question" class="question"></div>
+  <div id="banner" class="banner"></div>
+  <div id="board" class="board"></div>
+  <div id="strikes" class="strikes"></div>
+
+  <!-- PLAYER VIEW -->
+  <section id="player-panel" class="panel" hidden>
+    <div id="my-team" class="my-team"></div>
+    <button id="btn-buzz" class="buzz" disabled>BUZZ</button>
+    <form id="answer-form" class="answer-form">
+      <input id="in-answer" maxlength="60" placeholder="Type your answer for the host…" autocomplete="off">
+      <button class="btn" type="submit">Send</button>
+    </form>
+  </section>
+
+  <!-- HOST VIEW -->
+  <section id="host-panel" class="panel" hidden></section>
+
+  <ul id="feed" class="feed"></ul>
+</div>
+
+<div id="xflash" class="xflash" hidden>✕</div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="questions.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
