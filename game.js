@@ -36,7 +36,7 @@ const sfx = {
 /* ---------- UI helpers ---------- */
 function homeMsg(t) { $('#home-msg').textContent = t || ''; }
 function toast(t) { const e = $('#toast'); e.textContent = t; e.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => e.hidden = true, 2600); }
-function enterGame() { $('#home').hidden = true; $('#game').hidden = false; }
+function enterGame() { $('#home').hidden = true; $('#game').hidden = false; document.body.classList.add('in-game'); }
 const makeCode = () => { const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; return Array.from({ length: 4 }, () => c[Math.floor(Math.random() * c.length)]).join(''); };
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
@@ -220,7 +220,7 @@ function render() {
     e.classList.toggle('control', s.control === t);
   }
   $('#bank').textContent = s.bank;
-  $('#mult').textContent = s.mult > 1 ? '×' + s.mult : '';
+  $('#mult').textContent = s.mult > 1 ? 'x' + s.mult : '';
   $('#qcount').textContent = s.qNum ? 'Round ' + s.qNum + ' / ' + s.total : '';
 
   $('#question').textContent = s.phase === 'lobby' ? 'Waiting for the host to start…'
@@ -243,9 +243,9 @@ function gameOverText(s) {
 
 function renderBanner(s) {
   const b = $('#banner'); b.className = 'banner'; b.textContent = '';
-  if (s.phase === 'steal') { b.className = 'banner steal'; b.textContent = 'STEAL! ' + s.teamNames[other(s.control)] + ' get one guess'; }
-  else if (s.buzz) { b.className = 'banner buzzed'; b.textContent = '🔔 ' + s.buzz.name + ' (' + s.teamNames[s.buzz.team] + ') buzzed first!'; }
-  else if (s.buzzOpen) b.textContent = 'Buzzers are OPEN…';
+  if (s.phase === 'steal') { b.className = 'banner steal'; b.textContent = 'Steal: ' + s.teamNames[other(s.control)] + ' get one guess'; }
+  else if (s.buzz) { b.className = 'banner buzzed'; b.textContent = s.buzz.name + ' (' + s.teamNames[s.buzz.team] + ') buzzed in first'; }
+  else if (s.buzzOpen) b.textContent = 'Buzzers are open';
 }
 
 function renderBoard(s) {
@@ -264,7 +264,7 @@ function renderBoard(s) {
 
 function renderStrikes(s) {
   const box = $('#strikes'); box.replaceChildren();
-  for (let i = 0; i < 3; i++) box.append(el('div', 'x' + (i < s.strikes ? ' on' : ''), '✕'));
+  for (let i = 0; i < 3; i++) box.append(el('div', 'x' + (i < s.strikes ? ' on' : ''), 'X'));
 }
 
 function renderFeed(s) {
@@ -286,7 +286,7 @@ function renderPlayer(s) {
   $('#player-panel').hidden = false; $('#host-panel').hidden = true;
   const me = s.players.find(p => p.id === myId);
   const mt = $('#my-team');
-  if (me) { mt.className = 'my-team ' + me.team; mt.textContent = me.name + ' — Team ' + s.teamNames[me.team]; }
+  if (me) { mt.className = 'my-team ' + me.team; mt.textContent = me.name + ', team ' + s.teamNames[me.team]; }
   $('#btn-buzz').disabled = !s.buzzOpen;
   $('#btn-buzz').textContent = s.buzzOpen ? 'BUZZ!' : (s.buzz ? 'LOCKED' : 'BUZZ');
 }
@@ -299,11 +299,11 @@ function renderHost(s) {
 
   // flow
   const flow = el('div', 'row'); flow.append(el('h3', null, 'Flow'));
-  if (s.phase === 'lobby') flow.append(btn('▶ Start game', 'primary', () => act('start')));
+  if (s.phase === 'lobby') flow.append(btn('Start game', 'primary', () => act('start')));
   else if (s.phase !== 'gameover') {
     flow.append(btn(s.buzzOpen ? 'Close buzzers' : 'Open buzzers (B)', s.buzzOpen ? 'danger' : 'primary', () => act(s.buzzOpen ? 'closeBuzz' : 'openBuzz')));
-    flow.append(btn('✕ Strike (X)', 'danger', () => act('strike')));
-    flow.append(btn(s.qNum >= s.total ? 'Finish game' : 'Next question ▶', '', () => act('next')));
+    flow.append(btn('Strike (X)', 'danger', () => act('strike')));
+    flow.append(btn(s.qNum >= s.total ? 'Finish game' : 'Next question', '', () => act('next')));
   } else flow.append(el('span', 'muted', 'Refresh the page to start a new game.'));
   P.append(flow);
 
@@ -324,14 +324,14 @@ function renderHost(s) {
     P.append(grid);
 
     // award
-    const aw = el('div', 'row'); aw.append(el('h3', null, 'Award bank (' + s.bank + ' × ' + s.mult + ' = ' + (s.bank * s.mult) + ')'));
-    aw.append(btn('→ ' + s.teamNames.A, 'amber', () => act('award', 'A')));
-    aw.append(btn('→ ' + s.teamNames.B, 'sapphire', () => act('award', 'B')));
+    const aw = el('div', 'row'); aw.append(el('h3', null, 'Award bank (' + s.bank + ' x ' + s.mult + ' = ' + (s.bank * s.mult) + ')'));
+    aw.append(btn('To ' + s.teamNames.A, 'amber', () => act('award', 'A')));
+    aw.append(btn('To ' + s.teamNames.B, 'sapphire', () => act('award', 'B')));
     P.append(aw);
   }
 
   // players
-  const pl = el('div', 'row'); pl.append(el('h3', null, 'Players (' + s.players.length + ') — click to swap team'));
+  const pl = el('div', 'row'); pl.append(el('h3', null, 'Players (' + s.players.length + '), click to swap team'));
   if (!s.players.length) pl.append(el('span', 'muted', 'Nobody has joined yet. Share the room code or invite link.'));
   s.players.forEach(p => { const c = el('span', 'chip ' + p.team, p.name); c.onclick = () => act('swap', p.id); pl.append(c); });
   P.append(pl);

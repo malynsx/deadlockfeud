@@ -6,43 +6,50 @@
   <title>Deadlock Feud</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Jost:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=2">
+  <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="preload" href="fonts/ValveOccult-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
-<div class="skyline" aria-hidden="true"></div>
+
+<header class="sitebar">
+  <span class="sitebar-name">Deadlock Feud</span>
+  <span class="sitebar-note">A fan-made party game.<br>Not affiliated with Valve.</span>
+</header>
 
 <!-- HOME -->
 <div id="home" class="screen">
-  <div class="brandbar"><span class="brand-mark">◎</span> DEADLOCK <span class="brand-sub">fan-made party game</span></div>
-  <h1 class="logo"><span class="logo-small">Deadlock</span><span class="logo-big">FEUD</span></h1>
-  <p class="tagline"><span class="tag">Survey says&hellip;</span></p>
+  <p class="kicker">Gather your friends for</p>
+  <h1 class="title">Deadlock Feud</h1>
+  <p class="lede">A survey-says game show. One screen hosts, everyone else buzzes in from their phone.</p>
 
-  <div class="card">
-    <h2><span class="badge">1</span> Host a game</h2>
-    <p class="muted">Open this on the big screen. You'll get a room code for everyone else.</p>
-    <button id="btn-host" class="btn primary">Host a game</button>
-  </div>
+  <div class="home-grid">
+    <section class="card">
+      <h2><span class="num-ring">1</span>Host a game</h2>
+      <p class="muted">Open this on the screen everyone can see. You'll get a room code to share.</p>
+      <button id="btn-host" class="btn primary">Host a game</button>
+    </section>
 
-  <div class="card tilt">
-    <h2><span class="badge">2</span> Join a game</h2>
-    <input id="in-code" maxlength="4" placeholder="ROOM CODE" autocomplete="off" autocapitalize="characters">
-    <input id="in-name" maxlength="20" placeholder="Your name" autocomplete="off">
-    <button id="btn-join" class="btn">Join</button>
+    <section class="card">
+      <h2><span class="num-ring">2</span>Join a game</h2>
+      <input id="in-code" maxlength="4" placeholder="Room code" autocomplete="off" autocapitalize="characters" aria-label="Room code">
+      <input id="in-name" maxlength="20" placeholder="Your name" autocomplete="off" aria-label="Your name">
+      <button id="btn-join" class="btn primary">Join</button>
+    </section>
   </div>
   <p id="home-msg" class="msg"></p>
 </div>
 
 <!-- GAME -->
 <div id="game" class="screen" hidden>
-  <header class="topbar">
-    <div>Room <b id="room-code"></b></div>
+  <div class="topbar">
+    <div class="room">Room <b id="room-code"></b></div>
     <div id="phase-label"></div>
     <div class="topbar-right">
       <button id="btn-copy" class="btn small" hidden>Copy invite link</button>
       <button id="btn-present" class="btn small" hidden>Presentation mode (H)</button>
     </div>
-  </header>
+  </div>
 
   <div class="scores">
     <div id="team-A" class="team amber"><div class="team-name"></div><div class="team-score">0</div></div>
@@ -75,11 +82,11 @@
   <ul id="feed" class="feed"></ul>
 </div>
 
-<div id="xflash" class="xflash" hidden>✕</div>
+<div id="xflash" class="xflash" hidden>X</div>
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-<script src="questions.js?v=2"></script>
-<script src="game.js?v=2"></script>
+<script src="questions.js?v=3"></script>
+<script src="game.js?v=3"></script>
 </body>
 </html>
