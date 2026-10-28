@@ -63,7 +63,7 @@ const other = t => t === 'A' ? 'B' : 'A';
 // which relays pass on to subscribers without storing them. There's no retained message,
 // so the host re-sends state whenever someone joins.
 const NOSTR_KIND = 21021;
-let nostrKey = null;
+let nostrKey = null, lastSigned = null; // signing is the slow part on phones, so each message is signed once for all relays
 class NostrRelay {
   constructor(url) { this.url = url; this.h = {}; this.topics = new Set(); this.open = false; this.ended = false; this.connect(); }
   on(ev, fn) { (this.h[ev] = this.h[ev] || []).push(fn); }
@@ -85,8 +85,12 @@ class NostrRelay {
   publish(topic, payload) {
     if (!this.open) return;
     nostrKey = nostrKey || NostrTools.generateSecretKey();
-    const ev = NostrTools.finalizeEvent({ kind: NOSTR_KIND, created_at: Math.floor(Date.now() / 1000), tags: [['t', topic]], content: String(payload) }, nostrKey);
-    this.ws.send(JSON.stringify(['EVENT', ev]));
+    const content = String(payload);
+    if (!lastSigned || lastSigned.topic !== topic || lastSigned.content !== content) {
+      const ev = NostrTools.finalizeEvent({ kind: NOSTR_KIND, created_at: Math.floor(Date.now() / 1000), tags: [['t', topic]], content }, nostrKey);
+      lastSigned = { topic, content, msg: JSON.stringify(['EVENT', ev]) };
+    }
+    this.ws.send(lastSigned.msg);
   }
   end() { this.ended = true; try { this.ws.close(); } catch (_) {} }
 }
@@ -333,7 +337,11 @@ function act(name, arg) {
 // Host screen runs actions directly; the phone remote sends them to the host.
 function cmd(name, arg) {
   if (role === 'host') act(name, arg);
-  else if (role === 'remote') sendUp({ t: 'ctl', key: remoteKey, a: name, v: arg });
+  else if (role === 'remote') {
+    sendUp({ t: 'ctl', key: remoteKey, a: name, v: arg });
+    // show a reveal straight away; the host's next update confirms it
+    if (name === 'reveal' && priv && priv.answers[arg]) { priv.answers[arg].revealed = true; render(); }
+  }
 }
 
 /* =====================================================================
@@ -398,6 +406,7 @@ function render() {
   $('#btn-copy').hidden = role !== 'host'; $('#btn-present').hidden = role !== 'host';
 
   document.body.dataset.phase = s.phase;
+  preloadHeroes(s.players);
   noteReaction(s);
   for (const t of ['A', 'B']) renderTicket(s, t);
   $('#bank').textContent = s.bank;
@@ -424,10 +433,24 @@ function noteReaction(s) {
   if (!prev) { liveReact.until = 0; return; } // don't replay an old reaction on join
   setTimeout(() => { if (pub) render(); }, REACT_MS + 50);
   const hero = HERO_BY_ID[r.hero], line = hero && hero.lines[r.kind] && hero.lines[r.kind][r.line];
-  if (role === 'host' && line) { // one speaker: only the big screen plays voices
-    const a = new Audio(line.audio); a.volume = .9;
-    setTimeout(() => a.play().catch(() => {}), r.kind === 'gloat' ? 450 : 650);
-  }
+  if (role === 'host' && line) setTimeout(() => playVoice(line.audio), r.kind === 'gloat' ? 120 : 220); // one speaker: only the big screen
+}
+
+// Fetch reaction portraits (everyone) and voice lines (big screen) as soon as a hero is picked,
+// so the first gloat or strike shows and sounds without a download in between.
+const preloaded = new Set(), voices = {};
+function preloadHeroes(players) {
+  players.forEach(p => {
+    const h = HERO_BY_ID[p.hero]; if (!h || preloaded.has(h.id)) return;
+    preloaded.add(h.id);
+    [h.gloat, h.critical].forEach(src => { if (src) new Image().src = src; });
+    if (role === 'host') ['gloat', 'critical'].forEach(k => (h.lines[k] || []).forEach(l => { const a = new Audio(l.audio); a.preload = 'auto'; voices[l.audio] = a; }));
+  });
+}
+function playVoice(src) {
+  const a = voices[src] || (voices[src] = new Audio(src));
+  try { a.currentTime = 0; } catch (_) {}
+  a.volume = .9; a.play().catch(() => {});
 }
 
 function setImg(img, src) { if (img.getAttribute('src') !== src) { if (src) img.src = src; else img.removeAttribute('src'); } }
@@ -451,15 +474,25 @@ function renderTicket(s, t) {
   const members = s.players.filter(p => p.team === t);
   const r = s.react && s.react.team === t && liveReact && liveReact.n === s.react.n && Date.now() < liveReact.until ? s.react : null;
   const upId = s.up && s.up[t];
-  const face = r ? members.find(p => p.id === r.pid) || { hero: r.hero, name: '' } : members.find(p => p.id === upId && p.hero) || members.find(p => p.hero);
+  // the big portrait: whoever is reacting, else whoever is answering, else the first player with a hero
+  const face = r ? members.find(p => p.id === r.pid) || { hero: r.hero, name: '' }
+    : members.find(p => p.id === upId) || members.find(p => p.hero) || members[0];
   const hero = face && HERO_BY_ID[face.hero];
-  const img = e.querySelector('.t-face img');
   e.classList.toggle('has-face', !!hero);
   e.classList.toggle('gloat', !!(r && r.kind === 'gloat')); e.classList.toggle('critical', !!(r && r.kind === 'critical'));
-  setImg(img, hero ? (r && hero[r.kind]) || hero.card : '');
+  setImg(e.querySelector('.t-face img'), hero ? (r && hero[r.kind]) || hero.card : '');
+
+  const kicker = r ? (r.kind === 'gloat' ? 'Survey says yes' : 'Strike') : upId && face && face.id === upId ? 'Answering' : members.length ? 'On the team' : 'Waiting for players';
+  e.querySelector('.t-kicker').textContent = kicker;
+  e.querySelector('.t-player').textContent = face ? face.name : '';
+  e.querySelector('.t-hero').textContent = hero ? hero.name : face ? 'No hero yet' : '';
 
   const roster = e.querySelector('.t-roster'); roster.replaceChildren();
-  members.forEach(p => roster.append(faceEl(p, p.id === upId)));
+  members.forEach(p => {
+    const c = el('span', 'r-chip' + (p.id === upId ? ' up' : '') + (face && p.id === face.id ? ' shown' : ''));
+    c.append(faceEl(p), el('span', 'r-name', p.name));
+    roster.append(c);
+  });
 
   const say = $('#say-' + t), line = r && hero && hero.lines[r.kind] && hero.lines[r.kind][r.line];
   say.hidden = !line;
@@ -741,7 +774,11 @@ $('#btn-join').onclick = () => {
   if (!room) joinGame(code, name);
 };
 $('#in-name').onkeydown = e => { if (e.key === 'Enter') $('#btn-join').click(); };
-$('#btn-buzz').onclick = () => { if (role === 'player') sendUp({ t: 'buzz' }); };
+$('#btn-buzz').onclick = () => {
+  if (role !== 'player') return;
+  sendUp({ t: 'buzz' });
+  const b = $('#btn-buzz'); b.textContent = 'Sent'; b.disabled = true; // feedback now; the host's answer decides who was first
+};
 $('#answer-form').onsubmit = e => {
   e.preventDefault();
   const v = clean($('#in-answer').value, 60);
