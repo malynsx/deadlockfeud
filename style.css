@@ -84,6 +84,7 @@ input:focus { outline: none; border-color: var(--orange); }
 #in-code { text-transform: uppercase; letter-spacing: .3em; font: 600 1.35rem var(--head); text-align: center; }
 #in-code::placeholder { letter-spacing: .04em; font-size: 1.1rem; text-transform: none; }
 .msg { margin: 0; color: var(--yellow); min-height: 1.5em; }
+.diag { margin: 10px 0 0; padding: 10px 12px; background: var(--panel-2); color: var(--cream-2); font: 400 .8rem/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; user-select: all; }
 
 /* BUTTONS */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: transparent; border: 1px solid var(--cream-3); border-radius: 2px; padding: 9px 16px 10px; font: 700 .95rem/1.1 var(--label); cursor: pointer; transition: background-color .12s, border-color .12s; }

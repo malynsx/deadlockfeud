@@ -56,28 +56,44 @@ const other = t => t === 'A' ? 'B' : 'A';
    ===================================================================== */
 // Resolves once the first broker connects; later ones are added to `clients` as they come up.
 // onUp(client) runs on every (re)connect of each broker.
+const diag = {}; // why each broker failed, shown with the error so problems can be reported
 function connectAll(will, onUp, onMessage) {
   return new Promise((resolve, reject) => {
     let pending = BROKERS.length, done = false;
     const fail = () => { if (--pending === 0 && !done) { done = true; reject(); } };
     BROKERS.forEach((b, i) => {
+      const name = b.url.split('/')[2];
       let c, ok = false;
       try {
         c = mqtt.connect(b.url, { clientId: 'dlf_' + myId + '_' + i, username: b.username, password: b.password, will, reconnectPeriod: 3000, connectTimeout: 8000 });
-      } catch (_) { return fail(); }
-      const t = setTimeout(() => { if (!ok) { c.end(true); fail(); } }, 9000);
+      } catch (e) { diag[name] = 'threw ' + e.message; return fail(); }
+      const t = setTimeout(() => { if (!ok) { diag[name] = diag[name] || 'timed out'; c.end(true); fail(); } }, 9000);
+      c.on('error', e => { if (!ok) diag[name] = 'error ' + (e && e.message || e); });
+      c.on('close', () => { if (!ok && !diag[name]) diag[name] = 'closed by network'; });
       c.on('message', onMessage);
       c.on('connect', () => {
         onUp(c);
         if (ok) return;
-        ok = true; clearTimeout(t); clients.push(c);
+        ok = true; clearTimeout(t); clients.push(c); delete diag[name];
         if (!done) { done = true; resolve(); }
       });
     });
   });
 }
 const publishAll = (topic, payload, opts) => clients.forEach(c => { try { c.publish(topic, payload, opts); } catch (_) {} });
-const NO_SERVER = 'Could not reach the game server. A firewall, VPN or ad blocker may be blocking it. Try another network or browser.';
+const NO_SERVER = 'Could not reach the game server. A browser extension, firewall or VPN may be blocking it. Try another browser or network.';
+
+// Shows the error plus what failed, and checks whether this browser can open WebSockets at all.
+function connectError() {
+  homeMsg(NO_SERVER);
+  const lines = window.mqtt ? Object.entries(diag).map(([k, v]) => k + ': ' + v) : ['mqtt.min.js did not load (blocked or missing)'];
+  const box = el('pre', 'diag', lines.join('\n') + '\nWebSocket test: checking…');
+  $('#home-msg').append(box);
+  let ws, settled = false;
+  const done = r => { if (settled) return; settled = true; box.textContent = box.textContent.replace('checking…', r); try { ws.close(); } catch (_) {} };
+  try { ws = new WebSocket('wss://ws.postman-echo.com/raw'); ws.onopen = () => done('works'); ws.onerror = () => done('blocked'); } catch (_) { done('blocked'); }
+  setTimeout(() => done('timed out'), 6000);
+}
 
 function sendUp(d) {
   if (room) publishAll(room + '/up', JSON.stringify(Object.assign({ from: myId, m: ++sent }, d)), { qos: 1 });
@@ -87,14 +103,14 @@ function sendUp(d) {
    HOST
    ===================================================================== */
 async function startHost() {
-  if (!window.mqtt) return homeMsg(NO_SERVER);
+  if (!window.mqtt) return connectError();
   homeMsg('Opening room…');
   const code = makeCode();
   room = TOPIC(code);
   const onUp = c => { c.subscribe(room + '/up', { qos: 1 }); if (H) broadcast(); };
   const onMsg = (t, m) => { if (t === room + '/up') { try { onHostData(JSON.parse(m)); } catch (_) {} } };
   try { await connectAll({ topic: room + '/state', payload: '', retain: true, qos: 1 }, onUp, onMsg); }
-  catch (_) { room = null; return homeMsg(NO_SERVER); }
+  catch (_) { room = null; return connectError(); }
   role = 'host';
   initHost(code);
   addEventListener('pagehide', () => {
@@ -258,7 +274,7 @@ function onStateMessage(m) {
 }
 
 async function joinGame(code, name) {
-  if (!window.mqtt) return homeMsg(NO_SERVER);
+  if (!window.mqtt) return connectError();
   homeMsg('Connecting…');
   room = TOPIC(code);
   const onUp = c => { c.subscribe(room + '/state', { qos: 1 }); c.publish(room + '/up', JSON.stringify({ from: myId, t: 'join', name }), { qos: 1 }); };
@@ -268,14 +284,14 @@ async function joinGame(code, name) {
     render();
   };
   try { await connectAll({ topic: room + '/up', payload: JSON.stringify({ t: 'leave', from: myId }), qos: 0 }, onUp, onMsg); }
-  catch (_) { room = null; return homeMsg(NO_SERVER); }
+  catch (_) { room = null; return connectError(); }
   setInterval(() => sendUp({ t: 'join', name }), 5000);
   addEventListener('pagehide', () => sendUp({ t: 'leave' }));
   setTimeout(() => { if (!pub) homeMsg('Room not found. Check the code with your host.'); }, 7000);
 }
 
 async function joinRemote(code, key) {
-  if (!window.mqtt) return homeMsg(NO_SERVER);
+  if (!window.mqtt) return connectError();
   homeMsg('Connecting the remote…');
   room = TOPIC(code); remoteKey = key;
   const onUp = c => { c.subscribe(room + '/state', { qos: 1 }); c.subscribe(room + '/ctl/' + key, { qos: 1 }); };
@@ -289,7 +305,7 @@ async function joinRemote(code, key) {
     render();
   };
   try { await connectAll(undefined, onUp, onMsg); }
-  catch (_) { room = null; return homeMsg(NO_SERVER); }
+  catch (_) { room = null; return connectError(); }
   sendUp({ t: 'ctl', key, a: 'hello' });
   setTimeout(() => { if (role !== 'remote') homeMsg('This remote link has expired. Open a new one from the host screen.'); }, 7000);
 }
