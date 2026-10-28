@@ -406,7 +406,7 @@ window.HEROES = [
  {
   "id": "the-doorman",
   "name": "The Doorman",
-  "card": "heroes/the-doorman/card.webp",
+  "card": "heroes/the-doorman/card.webp?v=2",
   "gloat": "heroes/the-doorman/gloat.webp",
   "critical": "heroes/the-doorman/critical.webp",
   "quote": "Hurting them is fine, but vexing them is even better.",

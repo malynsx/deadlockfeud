@@ -106,7 +106,10 @@ def main():
         os.makedirs(folder, exist_ok=True)
 
         # portraits: list files starting with the hero name and pick card/gloat/critical
-        prefixes = {hero.replace(' ', '_'), hero.replace('The ', '').replace(' ', '_'), hero.split(' ')[0]}
+        # full name, without a leading "The", and the first word (e.g. "Nurse_card_gloat") unless that is just "The"
+        prefixes = {hero.replace(' ', '_'), hero.replace('The ', '').replace(' ', '_')}
+        if not hero.startswith('The '):
+            prefixes.add(hero.split(' ')[0])
         names = []
         for pre in prefixes:
             names += [i['name'] for i in get({'action': 'query', 'list': 'allimages', 'aiprefix': pre, 'ailimit': 500})['query']['allimages']]
