@@ -4,11 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Deadlock Feud</title>
+  <meta name="theme-color" content="#100e0e">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&display=swap" rel="stylesheet">
   <link rel="preload" href="fonts/ValveOccult-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="preload" href="fonts/ValvePulp-Bold.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 
@@ -19,74 +21,109 @@
 
 <!-- HOME -->
 <div id="home" class="screen">
-  <p class="kicker">Gather your friends for</p>
-  <h1 class="title">Deadlock Feud</h1>
-  <p class="lede">A survey-says game show. One screen hosts, everyone else buzzes in from their phone.</p>
+  <div class="home">
+    <article class="cover paper">
+      <div class="cover-frame">
+        <p class="cover-top"><span>A Deadlock party game</span><span>Vol. 1</span></p>
+        <h1 class="cover-title">Deadlock<br>Feud</h1>
+        <p class="cover-sub">Guess the most popular answers. Steal the points.</p>
+        <div class="cover-tags">
+          <span class="tag t-orange">Buzz in</span>
+          <span class="tag t-teal">Guess</span>
+          <span class="tag t-green">Steal</span>
+        </div>
+        <p class="cover-foot">Two teams<i>/</i>Ten rounds<i>/</i>One host</p>
+      </div>
+    </article>
 
-  <div class="home-grid">
-    <section class="card">
-      <h2><span class="num-ring">1</span>Host a game</h2>
-      <p class="muted">Open this on the screen everyone can see. You'll get a room code to share.</p>
-      <button id="btn-host" class="btn primary">Host a game</button>
-    </section>
+    <div class="entry">
+      <section class="card">
+        <h2><span class="num-ring">1</span>Host a game</h2>
+        <p class="muted">Open this on the screen everyone can see. Players join with a code or a QR scan.</p>
+        <button id="btn-host" class="btn primary">Host a game</button>
+      </section>
 
-    <section class="card">
-      <h2><span class="num-ring">2</span>Join a game</h2>
-      <input id="in-code" maxlength="4" placeholder="Room code" autocomplete="off" autocapitalize="characters" aria-label="Room code">
-      <input id="in-name" maxlength="20" placeholder="Your name" autocomplete="off" aria-label="Your name">
-      <button id="btn-join" class="btn primary">Join</button>
-    </section>
+      <section class="card">
+        <h2><span class="num-ring">2</span>Join a game</h2>
+        <input id="in-code" maxlength="4" placeholder="Room code" autocomplete="off" autocapitalize="characters" aria-label="Room code">
+        <input id="in-name" maxlength="20" placeholder="Your name" autocomplete="off" aria-label="Your name">
+        <button id="btn-join" class="btn primary">Join</button>
+      </section>
+      <p id="home-msg" class="msg" role="status"></p>
+    </div>
   </div>
-  <p id="home-msg" class="msg"></p>
 </div>
 
 <!-- GAME -->
-<div id="game" class="screen" hidden>
+<div id="game" hidden>
   <div class="topbar">
     <div class="room">Room <b id="room-code"></b></div>
     <div id="phase-label"></div>
     <div class="topbar-right">
       <button id="btn-copy" class="btn small" hidden>Copy invite link</button>
-      <button id="btn-present" class="btn small" hidden>Presentation mode (H)</button>
+      <button id="btn-present" class="btn small" hidden>Hide controls (H)</button>
     </div>
   </div>
 
-  <div class="scores">
-    <div id="team-A" class="team amber"><div class="team-name"></div><div class="team-score">0</div></div>
-    <div class="center">
-      <div class="bank-label">BANK <span id="mult"></span></div>
-      <div id="bank" class="bank">0</div>
-      <div id="qcount" class="muted"></div>
-    </div>
-    <div id="team-B" class="team sapphire"><div class="team-name"></div><div class="team-score">0</div></div>
+  <div class="layout">
+    <main class="stage">
+      <div class="scores">
+        <div id="team-A" class="ticket amber"><span class="tag team-name"></span><div class="team-score">0</div><div class="ticket-note"></div></div>
+        <div class="center">
+          <div class="bank-label">Bank <span id="mult"></span></div>
+          <div id="bank" class="bank">0</div>
+        </div>
+        <div id="team-B" class="ticket sapphire"><span class="tag team-name"></span><div class="team-score">0</div><div class="ticket-note"></div></div>
+      </div>
+
+      <!-- LOBBY (shown before the first question) -->
+      <section id="lobby" class="lobby" hidden>
+        <div class="join-card paper">
+          <p class="kicker-ink">Join on your phone</p>
+          <div id="qr" class="qr"></div>
+          <p class="join-url" id="join-url"></p>
+          <p class="join-code-label">Room code</p>
+          <p class="join-code" id="join-code"></p>
+        </div>
+        <div class="rosters">
+          <div class="roster amber"><span class="tag" id="roster-name-A"></span><ul id="roster-A"></ul></div>
+          <div class="roster sapphire"><span class="tag" id="roster-name-B"></span><ul id="roster-B"></ul></div>
+        </div>
+      </section>
+
+      <!-- ROUND -->
+      <section id="round">
+        <div class="question-card paper">
+          <div class="q-tags"><span class="tag t-ink" id="qcount"></span><span class="tag t-orange" id="qmult" hidden></span></div>
+          <h2 id="question" class="question"></h2>
+        </div>
+        <div id="banner" class="banner"></div>
+        <div id="board" class="board"></div>
+        <div id="strikes" class="strikes"></div>
+      </section>
+
+      <!-- PLAYER VIEW -->
+      <section id="player-panel" class="player" hidden>
+        <div id="my-team" class="my-team"></div>
+        <button id="btn-buzz" class="buzz" disabled>Buzz</button>
+        <form id="answer-form" class="answer-form">
+          <input id="in-answer" maxlength="60" placeholder="Type your answer for the host" autocomplete="off" aria-label="Your answer">
+          <button class="btn" type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+
+    <!-- HOST CONTROLS (host screen and phone remote) -->
+    <aside id="host-panel" class="host" hidden></aside>
   </div>
-
-  <div id="question" class="question"></div>
-  <div id="banner" class="banner"></div>
-  <div id="board" class="board"></div>
-  <div id="strikes" class="strikes"></div>
-
-  <!-- PLAYER VIEW -->
-  <section id="player-panel" class="panel" hidden>
-    <div id="my-team" class="my-team"></div>
-    <button id="btn-buzz" class="buzz" disabled>BUZZ</button>
-    <form id="answer-form" class="answer-form">
-      <input id="in-answer" maxlength="60" placeholder="Type your answer for the host…" autocomplete="off">
-      <button class="btn" type="submit">Send</button>
-    </form>
-  </section>
-
-  <!-- HOST VIEW -->
-  <section id="host-panel" class="panel" hidden></section>
-
-  <ul id="feed" class="feed"></ul>
 </div>
 
-<div id="xflash" class="xflash" hidden>X</div>
-<div id="toast" class="toast" hidden></div>
+<div id="xflash" class="xflash" hidden><span>X</span></div>
+<div id="toast" class="toast" role="status" hidden></div>
 
 <script src="vendor/mqtt.min.js"></script>
-<script src="questions.js?v=4"></script>
-<script src="game.js?v=4"></script>
+<script src="vendor/qrcode.min.js"></script>
+<script src="questions.js?v=5"></script>
+<script src="game.js?v=5"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 'use strict';
-/* Deadlock Feud — host-authoritative game relayed through a public MQTT broker (WebSockets).
+/* Deadlock Feud — host-authoritative game relayed through public MQTT brokers (WebSockets).
    The host's browser is the "server". Players connect with a 4-letter room code.
-   A WebSocket relay works on any network, unlike direct WebRTC peer connections. */
+   The host can also run the game from a phone remote, which gets the answers on a private topic. */
 
 // Everyone connects to every broker they can reach, so host and players always share one.
 // shiftr runs on port 443, which gets through firewalls that block the others' ports.
@@ -14,13 +14,15 @@ const TOPIC = code => 'dlfeud/v2/' + code;
 const $ = s => document.querySelector(s);
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 const clean = (s, n = 20) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n);
+const randId = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
 
 let clients = [], room = null, role = null, seq = 0, lastSeq = -1, sent = 0;
-const handled = new Set();  // host only: message ids already acted on (each arrives once per broker)
-const myId = Math.random().toString(36).slice(2, 10);
+const handled = new Set();   // host only: message ids already acted on (each arrives once per broker)
+const myId = randId(8);
 const seen = new Map();      // host only: playerId -> last time we heard from them
 let H = null;                // host only: full private state
 let pub = null, prev = null; // public state (what everybody sees)
+let remoteKey = null, priv = null, lastPriv = -1; // phone remote only
 
 /* ---------- sound ---------- */
 let actx;
@@ -42,13 +44,15 @@ const sfx = {
 
 /* ---------- UI helpers ---------- */
 function homeMsg(t) { $('#home-msg').textContent = t || ''; }
-function toast(t) { const e = $('#toast'); e.textContent = t; e.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => e.hidden = true, 2600); }
-function enterGame() { $('#home').hidden = true; $('#game').hidden = false; document.body.classList.add('in-game'); }
+function toast(t) { const e = $('#toast'); e.textContent = t; e.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => e.hidden = true, 3200); }
+function enterGame() { $('#home').hidden = true; $('#game').hidden = false; document.body.classList.add('in-game', 'role-' + role); }
 const makeCode = () => { const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; return Array.from({ length: 4 }, () => c[Math.floor(Math.random() * c.length)]).join(''); };
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const pageUrl = () => location.origin + location.pathname;
+const other = t => t === 'A' ? 'B' : 'A';
 
 /* =====================================================================
-   HOST
+   NETWORK
    ===================================================================== */
 // Resolves once the first broker connects; later ones are added to `clients` as they come up.
 // onUp(client) runs on every (re)connect of each broker.
@@ -75,6 +79,13 @@ function connectAll(will, onUp, onMessage) {
 const publishAll = (topic, payload, opts) => clients.forEach(c => { try { c.publish(topic, payload, opts); } catch (_) {} });
 const NO_SERVER = 'Could not reach the game server. A firewall, VPN or ad blocker may be blocking it. Try another network or browser.';
 
+function sendUp(d) {
+  if (room) publishAll(room + '/up', JSON.stringify(Object.assign({ from: myId, m: ++sent }, d)), { qos: 1 });
+}
+
+/* =====================================================================
+   HOST
+   ===================================================================== */
 async function startHost() {
   if (!window.mqtt) return homeMsg(NO_SERVER);
   homeMsg('Opening room…');
@@ -85,19 +96,24 @@ async function startHost() {
   try { await connectAll({ topic: room + '/state', payload: '', retain: true, qos: 1 }, onUp, onMsg); }
   catch (_) { room = null; return homeMsg(NO_SERVER); }
   role = 'host';
-  addEventListener('pagehide', () => publishAll(room + '/state', '', { retain: true }));
+  initHost(code);
+  addEventListener('pagehide', () => {
+    publishAll(room + '/state', '', { retain: true });
+    publishAll(room + '/ctl/' + H.remoteKey, '', { retain: true });
+  });
   setInterval(() => seen.forEach((t, id) => { if (Date.now() - t > 20000) dropPlayer(id); }), 5000);
-  initHost(code); enterGame();
+  enterGame();
+  broadcast();
 }
 
 function initHost(code) {
   H = {
-    code, order: shuffle(window.QUESTIONS.map((_, i) => i)), qNum: 0, q: null,
+    code, remoteKey: randId(10), remoteOn: false, history: [],
+    order: shuffle(window.QUESTIONS.map((_, i) => i)), qNum: 0, q: null,
     answers: [], strikes: 0, bank: 0, scores: { A: 0, B: 0 },
     teamNames: { A: 'Amber', B: 'Sapphire' }, control: null,
     buzzOpen: false, buzz: null, phase: 'lobby', players: [], feed: []
   };
-  broadcast();
 }
 
 const mult = () => !H || H.qNum <= 3 ? 1 : H.qNum <= 6 ? 2 : 3;
@@ -108,15 +124,17 @@ function publicState() {
     question: H.q ? H.q.q : '',
     answers: H.answers.map(a => a.revealed ? { revealed: true, text: a.text, points: a.points } : { revealed: false }),
     strikes: H.strikes, bank: H.bank, scores: H.scores, teamNames: H.teamNames,
-    control: H.control, buzzOpen: H.buzzOpen, buzz: H.buzz,
+    control: H.control, buzzOpen: H.buzzOpen, buzz: H.buzz, canUndo: H.history.length > 0,
     players: H.players.map(p => ({ id: p.id, name: p.name, team: p.team })),
-    feed: H.feed.slice(-6)
+    feed: H.feed.slice(-8)
   };
 }
 
 function broadcast() {
   pub = publicState();
   publishAll(room + '/state', JSON.stringify({ t: 'state', n: ++seq, s: pub }), { qos: 1, retain: true });
+  // the phone remote needs the hidden answers; only it knows this topic
+  publishAll(room + '/ctl/' + H.remoteKey, JSON.stringify({ n: seq, answers: H.answers }), { qos: 1, retain: true });
   render();
 }
 
@@ -124,6 +142,7 @@ function onHostData(d) {
   if (!d || typeof d !== 'object' || !H) return;
   const id = clean(d.from, 16); if (!id) return;
   if (d.m) { const key = id + ':' + d.m; if (handled.has(key)) return; handled.add(key); }
+  if (d.t === 'ctl') return onRemote(d);
   if (d.t === 'leave') return dropPlayer(id);
   seen.set(id, Date.now());
   let p = H.players.find(x => x.id === id);
@@ -145,6 +164,19 @@ function onHostData(d) {
   }
 }
 
+function onRemote(d) {
+  if (d.key !== H.remoteKey) return;
+  if (d.a === 'hello') {
+    if (!H.remoteOn) {
+      H.remoteOn = true;
+      document.body.classList.add('presenting');
+      toast('Phone remote connected. Controls are hidden here, press H to show them.');
+    }
+    return broadcast();
+  }
+  if (Object.prototype.hasOwnProperty.call(actions, d.a)) act(d.a, d.v);
+}
+
 function dropPlayer(id) {
   if (!H) return;
   seen.delete(id);
@@ -152,54 +184,77 @@ function dropPlayer(id) {
   if (i >= 0) { H.players.splice(i, 1); broadcast(); }
 }
 
-const other = t => t === 'A' ? 'B' : 'A';
+// Game actions can be undone; roster and housekeeping actions can't.
+const UNDOABLE = new Set(['start', 'next', 'openBuzz', 'closeBuzz', 'control', 'reveal', 'strike', 'award', 'steal', 'resetScores']);
+const SNAP_KEYS = ['qNum', 'q', 'answers', 'strikes', 'bank', 'scores', 'control', 'buzzOpen', 'buzz', 'phase'];
+const isTeam = t => t === 'A' || t === 'B';
 
 const actions = {
   start() { actions.next(); },
   next() {
-    if (H.qNum >= H.order.length) { H.phase = 'gameover'; H.q = null; H.answers = []; H.buzzOpen = false; H.buzz = null; return; }
+    if (H.qNum >= H.order.length) { H.phase = 'gameover'; H.q = null; H.answers = []; H.buzzOpen = false; H.buzz = null; H.control = null; return; }
     H.q = window.QUESTIONS[H.order[H.qNum]]; H.qNum++;
     H.answers = H.q.a.slice(0, 8).map(([text, points]) => ({ text, points, revealed: false }));
     H.strikes = 0; H.bank = 0; H.control = null; H.buzz = null; H.buzzOpen = false; H.phase = 'faceoff';
   },
-  openBuzz() { if (!H.q) return; H.buzz = null; H.buzzOpen = true; },
+  openBuzz() { if (!H.q || H.phase !== 'faceoff') return; H.buzz = null; H.buzzOpen = true; },
   closeBuzz() { H.buzzOpen = false; },
-  control(team) { H.control = team; if (H.phase === 'faceoff') { H.phase = 'play'; H.strikes = 0; } },
+  control(team) { if (!isTeam(team) || !H.q) return; H.control = team; H.buzzOpen = false; if (H.phase === 'faceoff') { H.phase = 'play'; H.strikes = 0; } },
   reveal(i) {
-    const a = H.answers[i]; if (!a || a.revealed || !H.q) return;
+    const a = H.answers[i]; if (!a || a.revealed || !H.q || H.phase === 'roundover') return;
     a.revealed = true; H.bank += a.points;
-    if (H.answers.every(x => x.revealed) && H.phase === 'play') H.phase = 'roundover';
   },
   strike() {
-    if (!H.q || H.phase === 'roundover' || H.phase === 'lobby') return;
+    if (!H.q || !['faceoff', 'play', 'steal'].includes(H.phase)) return;
     H.strikes = Math.min(3, H.strikes + 1);
     if (H.strikes >= 3 && H.phase === 'play') H.phase = 'steal';
   },
   award(team) {
-    if (!H.q) return;
+    if (!isTeam(team) || !H.q || H.phase === 'roundover') return;
     H.scores[team] += H.bank * mult(); H.bank = 0;
     H.answers.forEach(a => a.revealed = true);
     H.phase = 'roundover'; H.buzzOpen = false;
   },
-  swap(id) { const p = H.players.find(x => x.id === id); if (p) p.team = other(p.team); },
-  rename() {
-    for (const t of ['A', 'B']) { const n = clean(prompt('Name for team ' + t + ':', H.teamNames[t]), 14); if (n) H.teamNames[t] = n; }
+  steal(worked) { if (H.phase === 'steal' && isTeam(H.control)) actions.award(worked ? other(H.control) : H.control); },
+  undo() {
+    const snap = H.history.pop(); if (!snap) return;
+    Object.assign(H, JSON.parse(snap));
   },
-  resetScores() { if (confirm('Reset both scores to 0?')) H.scores = { A: 0, B: 0 }; },
+  restart() {
+    Object.assign(H, { order: shuffle(window.QUESTIONS.map((_, i) => i)), qNum: 0, q: null, answers: [], strikes: 0, bank: 0,
+      scores: { A: 0, B: 0 }, control: null, buzzOpen: false, buzz: null, phase: 'lobby', feed: [], history: [] });
+  },
+  swap(id) { const p = H.players.find(x => x.id === id); if (p) p.team = other(p.team); },
+  renameTeam(v) { if (v && isTeam(v.team)) { const n = clean(v.name, 14); if (n) H.teamNames[v.team] = n; } },
+  resetScores() { H.scores = { A: 0, B: 0 }; },
   clearFeed() { H.feed = []; }
 };
 
 function act(name, arg) {
-  if (role !== 'host' || !H) return;
+  if (role !== 'host' || !H || !actions[name]) return;
+  if (UNDOABLE.has(name)) {
+    H.history.push(JSON.stringify(Object.fromEntries(SNAP_KEYS.map(k => [k, H[k]]))));
+    if (H.history.length > 30) H.history.shift();
+  }
   actions[name](arg);
   broadcast();
 }
 
+// Host screen runs actions directly; the phone remote sends them to the host.
+function cmd(name, arg) {
+  if (role === 'host') act(name, arg);
+  else if (role === 'remote') sendUp({ t: 'ctl', key: remoteKey, a: name, v: arg });
+}
+
 /* =====================================================================
-   PLAYER
+   PLAYER + REMOTE
    ===================================================================== */
-function sendUp(d) {
-  if (room) publishAll(room + '/up', JSON.stringify(Object.assign({ from: myId, m: ++sent }, d)), { qos: 1 });
+function onStateMessage(m) {
+  if (!m.length) { if (pub) toast('The host left, so the game has ended'); return false; }
+  let d; try { d = JSON.parse(m); } catch (_) { return false; }
+  if (d.t !== 'state' || d.n <= lastSeq) return false; // same state arrives once per broker
+  lastSeq = d.n; pub = d.s;
+  return true;
 }
 
 async function joinGame(code, name) {
@@ -208,11 +263,7 @@ async function joinGame(code, name) {
   room = TOPIC(code);
   const onUp = c => { c.subscribe(room + '/state', { qos: 1 }); c.publish(room + '/up', JSON.stringify({ from: myId, t: 'join', name }), { qos: 1 }); };
   const onMsg = (t, m) => {
-    if (t !== room + '/state') return;
-    if (!m.length) { if (pub) toast('The host left, so the game has ended'); return; }
-    let d; try { d = JSON.parse(m); } catch (_) { return; }
-    if (d.t !== 'state' || d.n <= lastSeq) return; // same state arrives once per broker
-    lastSeq = d.n; pub = d.s;
+    if (t !== room + '/state' || !onStateMessage(m)) return;
     if (role !== 'player') { role = 'player'; homeMsg(''); enterGame(); }
     render();
   };
@@ -223,144 +274,273 @@ async function joinGame(code, name) {
   setTimeout(() => { if (!pub) homeMsg('Room not found. Check the code with your host.'); }, 7000);
 }
 
+async function joinRemote(code, key) {
+  if (!window.mqtt) return homeMsg(NO_SERVER);
+  homeMsg('Connecting the remote…');
+  room = TOPIC(code); remoteKey = key;
+  const onUp = c => { c.subscribe(room + '/state', { qos: 1 }); c.subscribe(room + '/ctl/' + key, { qos: 1 }); };
+  const onMsg = (t, m) => {
+    if (t === room + '/ctl/' + key) {
+      let d; try { d = JSON.parse(m); } catch (_) { return; }
+      if (!d || d.n <= lastPriv) return;
+      lastPriv = d.n; priv = d;
+    } else if (t !== room + '/state' || !onStateMessage(m)) return;
+    if (pub && priv && role !== 'remote') { role = 'remote'; homeMsg(''); enterGame(); }
+    render();
+  };
+  try { await connectAll(undefined, onUp, onMsg); }
+  catch (_) { room = null; return homeMsg(NO_SERVER); }
+  sendUp({ t: 'ctl', key, a: 'hello' });
+  setTimeout(() => { if (role !== 'remote') homeMsg('This remote link has expired. Open a new one from the host screen.'); }, 7000);
+}
+
 /* =====================================================================
-   RENDER (shared by host and players)
+   RENDER (shared)
    ===================================================================== */
-const PHASE = { lobby: 'Lobby', faceoff: 'Face-off', play: 'Playing', steal: 'Steal!', roundover: 'Round over', gameover: 'Game over' };
+const PHASE = { lobby: 'Lobby', faceoff: 'Face-off', play: 'Playing', steal: 'Steal', roundover: 'Round over', gameover: 'Game over' };
+const MULT_LABEL = { 2: 'Double points', 3: 'Triple points' };
 
 function render() {
   if (!pub) return;
-  const s = pub, isHost = role === 'host';
+  const s = pub, controls = role === 'host' || role === 'remote';
   $('#room-code').textContent = s.code;
-  $('#phase-label').textContent = PHASE[s.phase] || '';
-  $('#btn-copy').hidden = !isHost; $('#btn-present').hidden = !isHost;
+  $('#phase-label').textContent = role === 'remote' ? 'Phone remote' : (PHASE[s.phase] || '');
+  $('#btn-copy').hidden = role !== 'host'; $('#btn-present').hidden = role !== 'host';
+
   for (const t of ['A', 'B']) {
     const e = $('#team-' + t);
     e.querySelector('.team-name').textContent = s.teamNames[t];
     e.querySelector('.team-score').textContent = s.scores[t];
+    e.querySelector('.ticket-note').textContent = s.control === t ? (s.phase === 'steal' ? 'Defending' : 'In control') : (s.phase === 'steal' && s.control ? 'Stealing' : '');
     e.classList.toggle('control', s.control === t);
   }
   $('#bank').textContent = s.bank;
   $('#mult').textContent = s.mult > 1 ? 'x' + s.mult : '';
-  $('#qcount').textContent = s.qNum ? 'Round ' + s.qNum + ' / ' + s.total : '';
 
-  $('#question').textContent = s.phase === 'lobby' ? 'Waiting for the host to start…'
-    : s.phase === 'gameover' ? gameOverText(s) : s.question;
+  $('#lobby').hidden = s.phase !== 'lobby';
+  $('#round').hidden = s.phase === 'lobby';
+  if (s.phase === 'lobby') renderLobby(s);
+  else renderRound(s);
 
-  renderBanner(s);
-  renderBoard(s);
-  renderStrikes(s);
-  renderFeed(s);
-  if (isHost) renderHost(s); else renderPlayer(s);
+  if (controls) renderHost(s); else renderPlayer(s);
   detectEvents(s);
   prev = s;
 }
 
-function gameOverText(s) {
-  const a = s.scores.A, b = s.scores.B;
-  if (a === b) return 'It\'s a tie at ' + a + '!';
-  return (a > b ? s.teamNames.A : s.teamNames.B) + ' win ' + Math.max(a, b) + ' – ' + Math.min(a, b) + '!';
+let qrFor = null;
+function renderLobby(s) {
+  const join = pageUrl() + '?room=' + s.code;
+  if (qrFor !== join && window.QRCode) {
+    qrFor = join; $('#qr').replaceChildren();
+    new QRCode($('#qr'), { text: join, width: 256, height: 256, colorDark: '#1b1512', colorLight: '#efe2c8', correctLevel: QRCode.CorrectLevel.M });
+  }
+  $('#join-url').textContent = pageUrl().replace(/^https?:\/\//, '').replace(/\/$/, '');
+  $('#join-code').textContent = s.code;
+  for (const t of ['A', 'B']) {
+    $('#roster-name-' + t).textContent = s.teamNames[t];
+    const ul = $('#roster-' + t); ul.replaceChildren();
+    const names = s.players.filter(p => p.team === t);
+    if (!names.length) ul.append(el('li', 'empty', 'Nobody yet'));
+    names.forEach(p => ul.append(el('li', p.id === myId ? 'me' : '', p.name)));
+  }
 }
 
-function renderBanner(s) {
+function renderRound(s) {
+  $('#qcount').textContent = s.phase === 'gameover' ? 'Final scores' : 'Question ' + s.qNum + ' of ' + s.total;
+  $('#qmult').hidden = !(s.mult > 1 && s.phase !== 'gameover');
+  $('#qmult').textContent = MULT_LABEL[s.mult] || '';
+  $('#question').textContent = s.phase === 'gameover' ? gameOverText(s) : s.question;
+
   const b = $('#banner'); b.className = 'banner'; b.textContent = '';
-  if (s.phase === 'steal') { b.className = 'banner steal'; b.textContent = 'Steal: ' + s.teamNames[other(s.control)] + ' get one guess'; }
-  else if (s.buzz) { b.className = 'banner buzzed'; b.textContent = s.buzz.name + ' (' + s.teamNames[s.buzz.team] + ') buzzed in first'; }
-  else if (s.buzzOpen) b.textContent = 'Buzzers are open';
-}
+  if (s.phase === 'steal') { b.className = 'banner tag t-orange'; b.textContent = s.teamNames[other(s.control)] + ' can steal with one guess'; }
+  else if (s.buzz && s.phase === 'faceoff') { b.className = 'banner tag t-yellow'; b.textContent = s.buzz.name + ' buzzed in for ' + s.teamNames[s.buzz.team]; }
+  else if (s.buzzOpen) { b.className = 'banner tag t-ink'; b.textContent = 'Buzzers are open'; }
 
-function renderBoard(s) {
   const board = $('#board'); board.replaceChildren();
   board.hidden = !s.answers.length;
+  board.style.setProperty('--rows', Math.ceil(s.answers.length / 2)); // 1-4 down the left, 5-8 down the right
   s.answers.forEach((a, i) => {
     const slot = el('div', 'slot');
     if (a.revealed) {
       slot.classList.add('revealed');
-      if (prev && prev.answers[i] && !prev.answers[i].revealed) slot.classList.add('flip');
+      if (prev && prev.qNum === s.qNum && prev.answers[i] && !prev.answers[i].revealed) slot.classList.add('just');
       slot.append(el('span', 'txt', a.text), el('span', 'pts', a.points));
     } else slot.append(el('span', 'num', i + 1));
     board.append(slot);
   });
-}
 
-function renderStrikes(s) {
   const box = $('#strikes'); box.replaceChildren();
+  box.hidden = s.phase === 'gameover';
   for (let i = 0; i < 3; i++) box.append(el('div', 'x' + (i < s.strikes ? ' on' : ''), 'X'));
 }
 
-function renderFeed(s) {
-  const ul = $('#feed'); ul.replaceChildren();
-  s.feed.forEach(f => { const li = el('li', f.team); li.append(el('b', null, f.name + ':'), document.createTextNode(f.text)); ul.append(li); });
+function gameOverText(s) {
+  const a = s.scores.A, b = s.scores.B;
+  if (a === b) return 'A tie at ' + a + ' points';
+  return (a > b ? s.teamNames.A : s.teamNames.B) + ' win, ' + Math.max(a, b) + ' to ' + Math.min(a, b);
 }
 
 function detectEvents(s) {
   if (!prev) return;
-  if (s.strikes > prev.strikes) { sfx.strike(); const x = $('#xflash'); x.hidden = false; x.style.animation = 'none'; void x.offsetWidth; x.style.animation = ''; setTimeout(() => x.hidden = true, 900); }
+  if (s.strikes > prev.strikes && s.qNum === prev.qNum) {
+    sfx.strike();
+    const x = $('#xflash'); x.hidden = false; x.style.animation = 'none'; void x.offsetWidth; x.style.animation = '';
+    clearTimeout(detectEvents.t); detectEvents.t = setTimeout(() => x.hidden = true, 800);
+  }
   const nowR = s.answers.filter(a => a.revealed).length, prevR = prev.answers.filter(a => a.revealed).length;
-  if (nowR > prevR && s.qNum === prev.qNum) sfx.ding();
+  if (nowR > prevR && s.qNum === prev.qNum && s.phase !== 'roundover') sfx.ding();
   if (s.buzz && (!prev.buzz || prev.buzz.id !== s.buzz.id)) sfx.buzz();
   if (s.phase === 'gameover' && prev.phase !== 'gameover') sfx.win();
 }
 
-/* ---------- player panel ---------- */
+/* ---------- player ---------- */
 function renderPlayer(s) {
   $('#player-panel').hidden = false; $('#host-panel').hidden = true;
   const me = s.players.find(p => p.id === myId);
   const mt = $('#my-team');
-  if (me) { mt.className = 'my-team ' + me.team; mt.textContent = me.name + ', team ' + s.teamNames[me.team]; }
-  $('#btn-buzz').disabled = !s.buzzOpen;
-  $('#btn-buzz').textContent = s.buzzOpen ? 'BUZZ!' : (s.buzz ? 'LOCKED' : 'BUZZ');
+  if (me) { mt.className = 'my-team ' + me.team; mt.replaceChildren(el('span', 'muted', 'You are on'), el('span', 'tag ' + (me.team === 'A' ? 't-orange' : 't-teal'), s.teamNames[me.team])); }
+  const buzz = $('#btn-buzz');
+  buzz.disabled = !s.buzzOpen;
+  buzz.textContent = s.buzzOpen ? 'Buzz' : s.buzz && s.phase === 'faceoff' ? (s.buzz.id === myId ? 'You buzzed' : 'Locked') : 'Wait';
+  buzz.classList.toggle('mine', !!(s.buzz && s.buzz.id === myId && s.phase === 'faceoff'));
 }
 
-/* ---------- host panel ---------- */
+/* ---------- host controls ---------- */
+const openSections = new Set(['answers']);
+const teamCls = t => t === 'A' ? 'amber' : 'sapphire';
+
+// What the host should do next, as a title, a sentence and the buttons for it.
+function nextStep(s, answers) {
+  const n = s.teamNames, c = s.control, worth = s.bank * s.mult;
+  const allOut = answers.length && answers.every(a => a.revealed);
+  const B = (label, a, v, cls = 'primary', key) => ({ label, a, v, cls, key });
+  switch (s.phase) {
+    case 'lobby':
+      return { title: 'Waiting for players', text: s.players.length ? s.players.length + ' joined. Start when everyone is in.' : 'Players scan the code on screen, or open the site and type ' + s.code + '.',
+        btns: [B('Start the game', 'start', null, 'primary', 'N')] };
+    case 'faceoff':
+      if (s.buzzOpen) return { title: 'Buzzers are open', text: 'Waiting for the first buzz.', btns: [B('Close buzzers', 'closeBuzz', null, '', 'B')] };
+      if (s.buzz) return { title: s.buzz.name + ' buzzed first', text: 'Hear their answer and reveal it below if it is on the board. Then pick the team that plays this round.',
+        btns: [B(n.A + ' play', 'control', 'A', 'amber'), B(n.B + ' play', 'control', 'B', 'sapphire'), B('Reopen buzzers', 'openBuzz', null, 'ghost', 'B')] };
+      return { title: 'Face-off', text: 'Read the question out loud, then open the buzzers.',
+        btns: [B('Open buzzers', 'openBuzz', null, 'primary', 'B'), B(n.A + ' play', 'control', 'A', 'ghost'), B(n.B + ' play', 'control', 'B', 'ghost')] };
+    case 'play':
+      if (allOut) return { title: 'Board cleared', text: n[c] + ' found every answer.', btns: [B('Give ' + worth + ' to ' + n[c], 'award', c, teamCls(c), 'N')] };
+      return { title: n[c] + ' are playing', text: 'Reveal correct answers. Strike wrong ones. Three strikes and ' + n[other(c)] + ' can steal.',
+        btns: [B('Strike ' + (s.strikes + 1), 'strike', null, 'danger', 'X'), B('Give ' + worth + ' to ' + n[c], 'award', c, 'ghost')] };
+    case 'steal':
+      return { title: n[other(c)] + ' steal', text: 'They get one guess. If it is on the board, reveal it, then choose what happened.',
+        btns: [B('Steal worked, ' + worth + ' to ' + n[other(c)], 'steal', true, teamCls(other(c))), B('Steal failed, ' + worth + ' to ' + n[c], 'steal', false, teamCls(c))] };
+    case 'roundover':
+      return { title: 'Round over', text: s.qNum >= s.total ? 'That was the last question.' : 'Next up: question ' + (s.qNum + 1) + ' of ' + s.total + (s.qNum + 1 > 3 && s.mult === 1 ? ', worth double.' : s.qNum + 1 > 6 && s.mult === 2 ? ', worth triple.' : '.'),
+        btns: [B(s.qNum >= s.total ? 'Show final scores' : 'Next question', 'next', null, 'primary', 'N')] };
+    case 'gameover':
+      return { title: 'Game over', text: gameOverText(s) + '.', btns: [B('Play again', 'restart', null, 'primary')] };
+  }
+  return { title: '', text: '', btns: [] };
+}
+
 function renderHost(s) {
   const P = $('#host-panel'); P.hidden = false; $('#player-panel').hidden = true;
+  // don't rebuild under someone typing a team name
+  if (P.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+  const answers = role === 'host' ? H.answers : (priv ? priv.answers : []);
   P.replaceChildren();
-  const btn = (label, cls, fn, disabled) => { const b = el('button', 'btn ' + (cls || ''), label); b.type = 'button'; b.onclick = fn; if (disabled) b.disabled = true; return b; };
+  const btn = (label, cls, fn, key) => {
+    const b = el('button', 'btn ' + (cls || ''), label); b.type = 'button'; b.onclick = fn;
+    if (key && role === 'host') b.append(el('kbd', null, key));
+    return b;
+  };
+  const section = (id, title, meta) => {
+    const d = el('details', 'hsec'); d.open = openSections.has(id);
+    d.ontoggle = () => d.open ? openSections.add(id) : openSections.delete(id);
+    const sum = el('summary', null, title); if (meta != null) sum.append(el('span', 'meta', meta));
+    d.append(sum); P.append(d); return d;
+  };
 
-  // flow
-  const flow = el('div', 'row'); flow.append(el('h3', null, 'Flow'));
-  if (s.phase === 'lobby') flow.append(btn('Start game', 'primary', () => act('start')));
-  else if (s.phase !== 'gameover') {
-    flow.append(btn(s.buzzOpen ? 'Close buzzers' : 'Open buzzers (B)', s.buzzOpen ? 'danger' : 'primary', () => act(s.buzzOpen ? 'closeBuzz' : 'openBuzz')));
-    flow.append(btn('Strike (X)', 'danger', () => act('strike')));
-    flow.append(btn(s.qNum >= s.total ? 'Finish game' : 'Next question', '', () => act('next')));
-  } else flow.append(el('span', 'muted', 'Refresh the page to start a new game.'));
-  P.append(flow);
+  // next step
+  const step = nextStep(s, answers);
+  const card = el('div', 'step paper');
+  card.append(el('p', 'step-kicker', 'Next step'), el('h3', null, step.title), el('p', 'step-text', step.text));
+  // on the remote the question is off-screen, so show it here to read out
+  if (role === 'remote' && s.question && s.phase !== 'gameover') card.prepend(el('p', 'step-q', s.question));
+  const row = el('div', 'step-btns');
+  step.btns.forEach(b => row.append(btn(b.label, b.cls, () => cmd(b.a, b.v), b.key)));
+  card.append(row);
+  P.append(card);
 
-  if (s.answers.length && s.phase !== 'lobby') {
-    // control
-    const ctl = el('div', 'row'); ctl.append(el('h3', null, 'Control'));
-    ctl.append(btn(s.teamNames.A + ' in control', 'amber', () => act('control', 'A')));
-    ctl.append(btn(s.teamNames.B + ' in control', 'sapphire', () => act('control', 'B')));
-    P.append(ctl);
-
-    // answers
-    const ah = el('div', 'row'); ah.append(el('h3', null, 'Answers (click or press 1–8)')); P.append(ah);
-    const grid = el('div', 'ans-grid');
-    H.answers.forEach((a, i) => {
-      const b = btn((i + 1) + '. ' + a.text + '  (' + a.points + ')', a.revealed ? 'done' : '', () => act('reveal', i));
-      grid.append(b);
+  // answer key
+  if (answers.length) {
+    const sec = section('answers', 'Answer key', role === 'host' ? 'press 1 to ' + answers.length : 'tap to reveal');
+    const list = el('ol', 'key');
+    answers.forEach((a, i) => {
+      const li = el('li', a.revealed ? 'out' : '');
+      const b = el('button', null); b.type = 'button'; b.disabled = a.revealed || s.phase === 'roundover';
+      b.append(el('span', 'k-num', i + 1), el('span', 'k-txt', a.text), el('span', 'k-pts', a.points));
+      b.onclick = () => cmd('reveal', i);
+      li.append(b); list.append(li);
     });
-    P.append(grid);
-
-    // award
-    const aw = el('div', 'row'); aw.append(el('h3', null, 'Award bank (' + s.bank + ' x ' + s.mult + ' = ' + (s.bank * s.mult) + ')'));
-    aw.append(btn('To ' + s.teamNames.A, 'amber', () => act('award', 'A')));
-    aw.append(btn('To ' + s.teamNames.B, 'sapphire', () => act('award', 'B')));
-    P.append(aw);
+    sec.append(list);
   }
 
-  // players
-  const pl = el('div', 'row'); pl.append(el('h3', null, 'Players (' + s.players.length + '), click to swap team'));
-  if (!s.players.length) pl.append(el('span', 'muted', 'Nobody has joined yet. Share the room code or invite link.'));
-  s.players.forEach(p => { const c = el('span', 'chip ' + p.team, p.name); c.onclick = () => act('swap', p.id); pl.append(c); });
-  P.append(pl);
+  // tools
+  const tools = el('div', 'tools');
+  if (['faceoff', 'play', 'steal'].includes(s.phase)) tools.append(btn('Strike', 'small danger', () => cmd('strike'), 'X'));
+  const undo = btn('Undo', 'small', () => cmd('undo'), 'U'); undo.disabled = !s.canUndo;
+  tools.append(undo);
+  if (s.phase !== 'lobby' && s.phase !== 'gameover' && s.phase !== 'roundover') {
+    tools.append(btn('Skip question', 'small ghost', () => { if (confirm('Skip this question without scoring it?')) cmd('next'); }));
+  }
+  P.append(tools);
 
-  // misc
-  const misc = el('div', 'row'); misc.append(el('h3', null, 'Misc'));
-  misc.append(btn('Rename teams', 'small', () => act('rename')), btn('Reset scores', 'small', () => act('resetScores')), btn('Clear answer feed', 'small', () => act('clearFeed')));
-  P.append(misc);
+  // typed answers
+  if (s.feed.length) {
+    const sec = section('feed', 'Typed answers', s.feed.length);
+    const ul = el('ul', 'feed');
+    s.feed.slice().reverse().forEach(f => { const li = el('li', f.team); li.append(el('b', null, f.name), document.createTextNode(f.text)); ul.append(li); });
+    sec.append(ul, btn('Clear', 'small ghost', () => cmd('clearFeed')));
+  }
+
+  // teams
+  const tsec = section('teams', 'Teams and players', s.players.length);
+  for (const t of ['A', 'B']) {
+    const box = el('div', 'team-edit ' + teamCls(t));
+    const inp = el('input'); inp.value = s.teamNames[t]; inp.maxLength = 14; inp.setAttribute('aria-label', 'Team name');
+    inp.onchange = () => cmd('renameTeam', { team: t, name: inp.value });
+    inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); };
+    const chips = el('div', 'chips');
+    const mine = s.players.filter(p => p.team === t);
+    if (!mine.length) chips.append(el('span', 'muted', 'Nobody yet'));
+    mine.forEach(p => { const c = el('button', 'chip', p.name); c.type = 'button'; c.title = 'Move to the other team'; c.onclick = () => cmd('swap', p.id); chips.append(c); });
+    box.append(inp, chips); tsec.append(box);
+  }
+  tsec.append(el('p', 'hint', 'Click a name to move it to the other team.'));
+
+  // phone remote (host screen only)
+  if (role === 'host') {
+    const rsec = section('remote', 'Run it from your phone', H.remoteOn ? 'connected' : null);
+    const url = pageUrl() + '?room=' + s.code + '&remote=' + H.remoteKey;
+    rsec.append(el('p', 'hint', 'The remote shows the answers, so keep this QR to yourself. Once it connects, the controls hide on this screen.'));
+    const qbox = el('div', 'remote-qr'); qbox.hidden = !showRemoteQr;
+    if (showRemoteQr && window.QRCode) new QRCode(qbox, { text: url, width: 180, height: 180, colorDark: '#1b1512', colorLight: '#efe2c8', correctLevel: QRCode.CorrectLevel.M });
+    const r = el('div', 'tools');
+    r.append(btn(showRemoteQr ? 'Hide QR' : 'Show QR', 'small', () => { showRemoteQr = !showRemoteQr; render(); }),
+      btn('Copy remote link', 'small ghost', () => copy(url, 'Remote link copied')));
+    rsec.append(qbox, r);
+  }
+
+  // game
+  const gsec = section('game', 'Game');
+  const g = el('div', 'tools');
+  g.append(btn('Reset scores', 'small ghost', () => { if (confirm('Reset both scores to 0?')) cmd('resetScores'); }),
+    btn('New game', 'small ghost', () => { if (confirm('Start over from the lobby? Scores reset and players stay.')) cmd('restart'); }));
+  gsec.append(g);
+  if (role === 'host') gsec.append(el('p', 'hint', 'Keys: 1 to 8 reveal, X strike, B buzzers, N next step, U undo, H hide controls.'));
+}
+let showRemoteQr = false;
+
+function copy(text, msg) {
+  (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast(msg), () => toast(text));
 }
 
 /* =====================================================================
@@ -373,16 +553,14 @@ $('#btn-join').onclick = () => {
   if (!name) return homeMsg('Enter your name.');
   if (!room) joinGame(code, name);
 };
+$('#in-name').onkeydown = e => { if (e.key === 'Enter') $('#btn-join').click(); };
 $('#btn-buzz').onclick = () => { if (role === 'player') sendUp({ t: 'buzz' }); };
 $('#answer-form').onsubmit = e => {
   e.preventDefault();
   const v = clean($('#in-answer').value, 60);
-  if (v && role === 'player') { sendUp({ t: 'answer', text: v }); $('#in-answer').value = ''; toast('Sent to host'); }
+  if (v && role === 'player') { sendUp({ t: 'answer', text: v }); $('#in-answer').value = ''; toast('Sent to the host'); }
 };
-$('#btn-copy').onclick = () => {
-  const url = location.origin + location.pathname + '?room=' + pub.code;
-  (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(() => toast('Invite link copied'), () => toast(url));
-};
+$('#btn-copy').onclick = () => copy(pageUrl() + '?room=' + pub.code, 'Invite link copied');
 function togglePresent() { document.body.classList.toggle('presenting'); }
 $('#btn-present').onclick = togglePresent;
 document.addEventListener('keydown', e => {
@@ -390,9 +568,14 @@ document.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k >= '1' && k <= '8') act('reveal', Number(k) - 1);
   else if (k === 'x') act('strike');
-  else if (k === 'b') act(pub && pub.buzzOpen ? 'closeBuzz' : 'openBuzz');
+  else if (k === 'b') act(pub.buzzOpen ? 'closeBuzz' : 'openBuzz');
+  else if (k === 'u') act('undo');
   else if (k === 'h') togglePresent();
+  else if (k === 'n') { const b = nextStep(pub, H.answers).btns.find(x => x.key === 'N'); if (b) act(b.a, b.v); }
 });
-// prefill from invite link
-const qp = new URLSearchParams(location.search).get('room');
-if (qp) { $('#in-code').value = qp.toUpperCase().slice(0, 4); $('#in-name').focus(); }
+
+// links: ?room=CODE prefills the join form, ?room=CODE&remote=KEY opens the phone remote
+const params = new URLSearchParams(location.search);
+const qRoom = clean(params.get('room'), 4).toUpperCase(), qRemote = clean(params.get('remote'), 16);
+if (qRoom && qRemote) joinRemote(qRoom, qRemote);
+else if (qRoom) { $('#in-code').value = qRoom; $('#in-name').focus(); }

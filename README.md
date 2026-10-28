@@ -11,14 +11,13 @@ A Family Feud-style game show for Deadlock. One person hosts on a big screen; ev
 
 ## Running a game
 
-1. Open the site on the screen everyone can see and click **Host a game**.
-2. Click **Copy invite link** and send it around (or read out the 4-letter code). Players type a name and join. Teams are auto-balanced; click a player's chip to swap them.
-3. **Start game**, then for each round:
-   - **Open buzzers (B)**. First buzz locks and shows on every screen.
-   - Pick which team is **in control**.
-   - Click an answer (or press **1–8**) to reveal it. Wrong answer: **X**. Three strikes opens a **steal** for the other team.
-   - **Award bank** to the winning team (rounds 4–6 score ×2, 7+ ×3).
-4. **H** toggles Presentation mode (hides the host controls so you can project the board). Players can also type answers, which show up in the feed for the host.
+1. Open the site on the screen everyone can see and click **Host a game**. Players scan the QR code on screen (or type the 4-letter code) and pick a name. Teams are balanced automatically.
+2. Optional but easiest: open **Run it from your phone** in the host panel and scan that QR with your own phone. Your phone becomes the remote with the answer key, and the big screen hides its controls. Don't let players scan this one, it shows the answers.
+3. Follow the **Next step** card. It always shows the one or two buttons you need: open buzzers, pick who plays, strike, steal result, next question.
+4. Reveal answers from the **Answer key** (or keys 1 to 8). Mis-click? **Undo** (U) steps back.
+5. Rounds 4 to 6 score double, 7 and up triple.
+
+Keys on the host screen: 1 to 8 reveal, X strike, B buzzers, N next step, U undo, H hide controls.
 
 ## Editing questions
 
